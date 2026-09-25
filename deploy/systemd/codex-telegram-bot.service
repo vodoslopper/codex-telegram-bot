@@ -1,0 +1,94 @@
+# codex-telegram-bot.service — a systemd *user* unit.
+#
+# Install (as the same unprivileged account that logged Codex in):
+#
+#   install -d -m 0700 "$HOME/.config/systemd/user"
+#   cp deploy/systemd/codex-telegram-bot.service "$HOME/.config/systemd/user/"
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now codex-telegram-bot.service
+#   journalctl --user -u codex-telegram-bot.service -f
+#
+# To keep it running after you log out, an administrator runs:
+#
+#   sudo loginctl enable-linger YOURUSER
+#
+# Edit the four paths below to match your installation. They must be absolute and
+# must agree with bot.env — in particular CODEX_HOME, which has to be the same
+# directory `codex login` was run against, or every turn will fail as
+# unauthenticated.
+
+[Unit]
+Description=Drive a local Codex CLI session from a private Telegram chat
+Documentation=file:///%h/codex-telegram-bot/README.md
+
+# Outbound HTTPS to api.telegram.org and the OpenAI/Codex endpoints is all this
+# needs. Long polling means no inbound port, no public address and no TLS
+# certificate to serve.
+After=network-online.target
+Wants=network-online.target
+
+# A wrong token or an unreadable database fails immediately and forever; stop
+# hammering systemd with restarts after five tries in five minutes.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# Configuration is read once at start-up, so a config change means a restart.
+# The file holds the bot token: keep it mode 0600.
+EnvironmentFile=%h/.config/codex-telegram-bot/bot.env
+
+# Absolute paths, repeated here so the unit is self-documenting and so a mistake
+# in either place is visible. These must match bot.env.
+Environment=BOT_WORKSPACE=%h/codex-bot-workspace
+Environment=BOT_STATE_DIR=%h/.local/share/codex-telegram-bot
+Environment=BOT_CODEX_BIN=%h/.local/bin/codex
+Environment=CODEX_HOME=%h/.local/share/codex-telegram-bot/codex
+
+# Codex needs somewhere to put temporary files, and it looks at HOME.
+Environment=HOME=%h
+
+ExecStart=%h/.local/bin/codex-telegram-bot
+
+# The first SIGTERM stops the poller and lets in-flight turns finish within
+# BOT_SHUTDOWN_GRACE; a second one cancels them. Give the graceful path room.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+Restart=on-failure
+RestartSec=5s
+
+# --- sandboxing -------------------------------------------------------------
+#
+# Deliberately lighter than a typical system service, and the reason matters:
+# everything set here is inherited by the Codex child process, and by every
+# command the agent runs. MemoryDenyWriteExecute= and SystemCallFilter= would
+# break a language runtime that JITs (node, python with some extensions, a JVM),
+# which is exactly what a coding agent gets asked to run. ProtectSystem=strict
+# would make the repository the agent is supposed to edit read-only.
+#
+# Codex's own sandbox (workspace-write) is the control that scopes what the agent
+# may change; these settings are the cheap ones that cannot break it.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+# /usr, /boot and /etc read-only. $HOME stays writable on purpose: the workspace,
+# the state directory and CODEX_HOME all live there.
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,25 @@
+# Build output
+/bin/
+/codex-telegram-bot
+*.exe
+
+# Local configuration: these hold the bot token.
+.env
+*.env
+!*.env.example
+bot.env
+
+# Local state: the database holds conversation replies.
+/state/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Editors and OS noise
+*.swp
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc
