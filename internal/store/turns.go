@@ -125,6 +125,20 @@ func (s *Store) BeginTurn(ctx context.Context, updateID int64, sessionID string,
 	return id, nil
 }
 
+// UpdateTurnArgv records the final invocation after workspace-locked attachment
+// paths have been resolved. The prompt remains elided by the caller.
+func (s *Store) UpdateTurnArgv(ctx context.Context, turnID, ownerUserID int64, argv []string) error {
+	encoded, err := json.Marshal(argv)
+	if err != nil {
+		return fmt.Errorf("store: encode turn argv: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE turns SET argv = ? WHERE id = ? AND owner_user_id = ?`, string(encoded), turnID, ownerUserID)
+	if err != nil {
+		return fmt.Errorf("store: update turn argv: %w", err)
+	}
+	return expectOneRow(res, fmt.Sprintf("turn %d", turnID))
+}
+
 // FinishTurn records the outcome of a turn.
 //
 // reply may be empty for a failed turn. exitCode is the child's exit status, or

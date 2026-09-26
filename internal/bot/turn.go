@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -104,6 +105,7 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		b.sendBest(turnCtx, p.Scope, notice)
 	}
 	var imagePaths []string
+	var available []store.RetainedMedia
 	var mediaPath string
 	if p.Media != nil {
 		path, err := plannedMediaPath(b.cfg.Workspace, p.Media.ext)
@@ -114,9 +116,6 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		}
 		mediaPath = path
 		prompt = mediaPrompt(prompt, p.Media, path)
-		if p.Media.image {
-			imagePaths = []string{path}
-		}
 	}
 
 	model, err := b.effectiveModel(turnCtx, p.Scope)
@@ -163,8 +162,68 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		return
 	}
 	defer releaseWS()
+	currentSession, err := b.st.GetSession(turnCtx, sess.ID, p.Scope.UserID)
+	if err != nil {
+		b.log.Error("could not check session after acquiring workspace", "session_id", sess.ID, "error", err.Error())
+		b.failBeforeRun(ctx, p, sess, turnID, req, "session check failed")
+		return
+	}
+	retained, err := b.st.RetainedMedia(turnCtx, sess.ID, p.Scope.UserID)
+	if err != nil {
+		b.log.Error("could not load retained media", "session_id", sess.ID, "error", err.Error())
+		b.failBeforeRun(ctx, p, sess, turnID, req, "attachment lookup failed")
+		return
+	}
+	if !currentSession.Archived {
+		for _, media := range retained {
+			if media.UnrelatedTurns >= 3 {
+				if err := removeMediaDirectory(sess.Workspace, media.Path); err != nil {
+					b.log.Warn("could not remove expired media", "media_id", media.ID, "error", err.Error())
+					continue
+				}
+				if err := b.st.DeleteRetainedMedia(turnCtx, media.ID, p.Scope.UserID); err != nil {
+					b.log.Warn("could not forget expired media", "media_id", media.ID, "error", err.Error())
+				}
+				continue
+			}
+			if _, err := os.Stat(media.Path); err != nil {
+				b.log.Warn("retained media is missing", "media_id", media.ID, "error", err.Error())
+				if err := removeMediaDirectory(sess.Workspace, media.Path); err != nil {
+					b.log.Warn("could not remove missing media directory", "media_id", media.ID, "error", err.Error())
+				}
+				if err := b.st.DeleteRetainedMedia(turnCtx, media.ID, p.Scope.UserID); err != nil {
+					b.log.Warn("could not forget missing media", "media_id", media.ID, "error", err.Error())
+				}
+				continue
+			}
+			available = append(available, media)
+		}
+	}
+	prompt = p.Text
+	if p.Media != nil {
+		prompt = mediaPrompt(prompt, p.Media, mediaPath)
+		if p.Media.image {
+			imagePaths = append(imagePaths, mediaPath)
+		}
+	}
+	prompt += retainedMediaPrompt(available)
+	req.Prompt = prompt + fileHandoffInstruction
+	req.Images = imagePaths
+	if err := b.st.UpdateTurnArgv(turnCtx, turnID, p.Scope.UserID, b.cx.ElidedArgv(req)); err != nil {
+		b.log.Error("could not record final invocation", "turn_id", turnID, "error", err.Error())
+		b.failBeforeRun(ctx, p, sess, turnID, req, "could not record invocation")
+		return
+	}
 	if p.Media != nil {
 		cleanup, err := b.stageMedia(turnCtx, p.Media, mediaPath)
+		if err == nil && currentSession.Archived {
+			defer cleanup()
+		} else if err == nil {
+			err = b.st.AddRetainedMedia(turnCtx, sess.ID, p.Scope.UserID, mediaPath, p.Media.kind)
+			if err != nil {
+				cleanup()
+			}
+		}
 		if err != nil {
 			b.log.Warn("could not prepare Telegram media", "kind", p.Media.kind, "error", err.Error())
 			status := store.TurnFailed
@@ -179,7 +238,6 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 			b.sendBest(afterCtx, p.Scope, mediaFailure(err))
 			return
 		}
-		defer cleanup()
 	}
 
 	// From here the wait is over and only Codex can make this slow, so this is
@@ -233,6 +291,15 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 	}
 
 	b.finish(afterCtx, p, sess, turnID, req, out)
+	if out.status == store.TurnCompleted {
+		b.advanceRetainedMedia(afterCtx, sess.Workspace, p.Scope.UserID, available, relatedMediaIDs(out.reply))
+	}
+}
+
+func (b *Bot) failBeforeRun(ctx context.Context, p *Prepared, sess store.Session, turnID int64, req codexcli.Request, reason string) {
+	afterCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterTurnTimeout)
+	defer cancel()
+	b.finish(afterCtx, p, sess, turnID, req, turnOutcome{status: store.TurnFailed, errMsg: reason})
 }
 
 // afterTurnTimeout bounds the post-turn bookkeeping and delivery. It is long

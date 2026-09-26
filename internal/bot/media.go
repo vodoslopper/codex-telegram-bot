@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"codex-telegram-bot/internal/store"
 	"codex-telegram-bot/internal/telegram"
 )
 
@@ -99,7 +101,7 @@ func attachmentOf(m *telegram.Message) *mediaAttachment {
 }
 
 // stageMedia writes one downloaded attachment into the workspace while its
-// lock is held. The caller removes the private directory after the turn.
+// lock is held. The caller keeps it for the session or calls cleanup on failure.
 func (b *Bot) stageMedia(ctx context.Context, media *mediaAttachment, path string) (func(), error) {
 	if media == nil {
 		return func() {}, nil
@@ -143,4 +145,68 @@ func mediaFailure(err error) string {
 		return "That file is too large to download through the Telegram Bot API (20 MB limit)."
 	}
 	return "I could not download or prepare that attachment. Please retry or send a smaller file."
+}
+
+// retainedMediaPrompt gives a resumed Codex turn the paths it may still use,
+// and asks that same turn to judge which files its current message concerns.
+func retainedMediaPrompt(media []store.RetainedMedia) string {
+	if len(media) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nRetained Telegram files from earlier turns in this session:\n")
+	for _, m := range media {
+		fmt.Fprintf(&b, "- ID %d (%s): %s\n", m.ID, m.Kind, m.Path)
+	}
+	b.WriteString("For each listed file relevant to the user's current message, add a separate line [[telegram-media-related:ID]] to your final answer, replacing ID with that file's number. Judge relevance from the message and conversation. Do not add the line for unrelated files. These lines are for the bot and are removed before sending the answer.")
+	return b.String()
+}
+
+func relatedMediaIDs(reply string) map[int64]bool {
+	ids := make(map[int64]bool)
+	for _, line := range strings.Split(reply, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "[[telegram-media-related:") || !strings.HasSuffix(line, "]]") {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(line, "[[telegram-media-related:"), "]]"), 10, 64)
+		if err == nil && n > 0 {
+			ids[n] = true
+		}
+	}
+	return ids
+}
+
+func removeMediaDirectory(workspace, path string) error {
+	dir := filepath.Dir(path)
+	root, err := filepath.Abs(workspace)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(dir) != root || !strings.HasPrefix(filepath.Base(dir), ".codex-telegram-media-") || !strings.HasPrefix(filepath.Base(path), "attachment.") {
+		return fmt.Errorf("refusing to remove an unexpected media path")
+	}
+	return os.RemoveAll(dir)
+}
+
+func (b *Bot) advanceRetainedMedia(ctx context.Context, workspace string, ownerUserID int64, media []store.RetainedMedia, related map[int64]bool) {
+	for _, m := range media {
+		if related[m.ID] {
+			continue
+		}
+		expired, err := b.st.IncrementMediaUnrelated(ctx, m.ID, ownerUserID)
+		if err != nil {
+			b.log.Warn("could not count unrelated turn for media", "media_id", m.ID, "error", err.Error())
+			continue
+		}
+		if expired {
+			if err := removeMediaDirectory(workspace, m.Path); err != nil {
+				b.log.Warn("could not remove expired media", "media_id", m.ID, "error", err.Error())
+				continue
+			}
+			if err := b.st.DeleteRetainedMedia(ctx, m.ID, ownerUserID); err != nil {
+				b.log.Warn("could not forget expired media", "media_id", m.ID, "error", err.Error())
+			}
+		}
+	}
 }

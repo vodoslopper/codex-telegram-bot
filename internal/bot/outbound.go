@@ -22,6 +22,8 @@ func (b *Bot) deliverReply(ctx context.Context, scope Scope, reply string, start
 	for _, line := range strings.Split(reply, "\n") {
 		if m := fileLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
 			paths = append(paths, m[1])
+		} else if isRelatedMediaLine(strings.TrimSpace(line)) {
+			continue
 		} else {
 			body = append(body, line)
 		}
@@ -38,6 +40,10 @@ func (b *Bot) deliverReply(ctx context.Context, scope Scope, reply string, start
 		}
 	}
 	return b.send(ctx, scope, strings.Join(body, "\n"))
+}
+
+func isRelatedMediaLine(line string) bool {
+	return strings.HasPrefix(line, "[[telegram-media-related:") && strings.HasSuffix(line, "]]")
 }
 
 func (b *Bot) validateOutboundFile(path string, startedAt time.Time) error {

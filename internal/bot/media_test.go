@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,8 +37,133 @@ func TestPhotoUsesLargestResolutionAndImageFlag(t *testing.T) {
 	if !strings.Contains(argv[len(argv)-1], "What is in this picture?") {
 		t.Errorf("caption missing: %q", argv)
 	}
-	if _, err := os.Stat(filepath.Dir(imagePath)); !os.IsNotExist(err) {
-		t.Errorf("staged media was not removed: %v", err)
+	if _, err := os.Stat(imagePath); err != nil {
+		t.Errorf("staged media was not retained: %v", err)
+	}
+}
+
+func setResumeReply(t *testing.T, h *harness, reply string) {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(h.fake.Path), "resume.txt")
+	if err := os.WriteFile(path, []byte(testkit.Events(threadOne, reply)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMediaRetainedUntilThreeUnrelatedSessionTurns(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("photo analyzed", "unused")})
+	h.tg.SetFile("photo", []byte("image bytes"))
+	u := msg(1, aliceChat, aliceID, "")
+	u.Message.Photo = []telegram.PhotoSize{{FileID: "photo", Width: 320, Height: 240}}
+	h.text(u)
+	sessions := h.sessions(t, aliceID, false)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d", len(sessions))
+	}
+	sessionID := sessions[0].ID
+	media, err := h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if err != nil || len(media) != 1 {
+		t.Fatalf("retained media = %+v, %v", media, err)
+	}
+	path, id := media[0].Path, media[0].ID
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("media disappeared after its turn: %v", err)
+	}
+
+	setResumeReply(t, h, fmt.Sprintf("It is blue.\n[[telegram-media-related:%d]]", id))
+	if got := h.text(msg(2, aliceChat, aliceID, "What color is it?")); got != "It is blue." {
+		t.Errorf("related reply = %q", got)
+	}
+	argv := h.fake.Argv(t, 2)
+	if !strings.Contains(argv[len(argv)-1], path) {
+		t.Errorf("follow-up lacks retained image path: %q", argv)
+	}
+	media, _ = h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if len(media) != 1 || media[0].UnrelatedTurns != 0 {
+		t.Fatalf("related turn counted as unrelated: %+v", media)
+	}
+
+	// Three turns in another session do not age this attachment.
+	h.text(msg(3, aliceChat, aliceID, "/new other"))
+	setResumeReply(t, h, "unrelated")
+	for i := int64(4); i <= 6; i++ {
+		h.text(msg(i, aliceChat, aliceID, "Other session"))
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("other session removed media: %v", err)
+	}
+	h.text(msg(7, aliceChat, aliceID, "/use "+sessionID))
+	for i := int64(8); i <= 10; i++ {
+		h.text(msg(i, aliceChat, aliceID, "Unrelated subject"))
+		_, err := os.Stat(path)
+		if i < 10 && err != nil {
+			t.Fatalf("media removed after only %d unrelated turns: %v", i-7, err)
+		}
+		if i == 10 && !os.IsNotExist(err) {
+			t.Fatalf("media remains after third unrelated turn: %v", err)
+		}
+	}
+	media, _ = h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if len(media) != 0 {
+		t.Fatalf("expired media is still recorded: %+v", media)
+	}
+}
+
+func TestArchiveRemovesRetainedMedia(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("seen", "seen")})
+	h.tg.SetFile("photo", []byte("image bytes"))
+	u := msg(1, aliceChat, aliceID, "")
+	u.Message.Photo = []telegram.PhotoSize{{FileID: "photo", Width: 320, Height: 240}}
+	h.text(u)
+	sessionID := h.sessions(t, aliceID, false)[0].ID
+	media, err := h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if err != nil || len(media) != 1 {
+		t.Fatalf("retained = %+v, %v", media, err)
+	}
+	path := media[0].Path
+	if got := h.text(msg(2, aliceChat, aliceID, "/archive "+sessionID)); !strings.Contains(got, "Archived") {
+		t.Fatalf("archive reply = %q", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("archive left media: %v", err)
+	}
+	media, err = h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if err != nil || len(media) != 0 {
+		t.Fatalf("archive left media rows: %+v, %v", media, err)
+	}
+	// A new attachment sent to a still-selected archived session is temporary.
+	h.tg.SetFile("another", []byte("another image"))
+	u = msg(3, aliceChat, aliceID, "")
+	u.Message.Photo = []telegram.PhotoSize{{FileID: "another", Width: 320, Height: 240}}
+	h.text(u)
+	media, err = h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if err != nil || len(media) != 0 {
+		t.Fatalf("archived session retained new media: %+v, %v", media, err)
+	}
+}
+
+func TestRetainedMediaSurvivesRestart(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("seen", "seen")})
+	h.tg.SetFile("photo", []byte("image bytes"))
+	u := msg(1, aliceChat, aliceID, "")
+	u.Message.Photo = []telegram.PhotoSize{{FileID: "photo", Width: 320, Height: 240}}
+	h.text(u)
+	sessionID := h.sessions(t, aliceID, false)[0].ID
+	media, err := h.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if err != nil || len(media) != 1 {
+		t.Fatalf("retained before restart = %+v, %v", media, err)
+	}
+	path := media[0].Path
+	h.Close()
+	restarted := newHarness(t, harnessOpts{ws: h.ws, state: h.state, home: h.home, spec: successSpec("seen", "unrelated")})
+	restarted.text(msg(2, aliceChat, aliceID, "Different subject"))
+	argv := restarted.fake.Argv(t, 1)
+	if !strings.Contains(argv[len(argv)-1], path) {
+		t.Errorf("resumed prompt lacks retained path: %q", argv)
+	}
+	media, err = restarted.st.RetainedMedia(context.Background(), sessionID, aliceID)
+	if err != nil || len(media) != 1 || media[0].UnrelatedTurns != 1 {
+		t.Fatalf("retained after restart = %+v, %v", media, err)
 	}
 }
 
@@ -98,9 +224,10 @@ func TestFileMediaIsAvailableAsLocalAttachment(t *testing.T) {
 			if hasImage != tc.image {
 				t.Errorf("image flag = %v, want %v: %q", hasImage, tc.image, argv)
 			}
-			path := strings.TrimSpace(prompt[strings.LastIndex(prompt, "file: ")+len("file: "):])
-			if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
-				t.Errorf("staged media was not removed: %v", err)
+			line := strings.SplitN(prompt[strings.Index(prompt, "Attached "):], "\n", 2)[0]
+			path := strings.SplitN(line, " file: ", 2)[1]
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("staged media was not retained: %v", err)
 			}
 		})
 	}

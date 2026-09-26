@@ -55,6 +55,7 @@ type Store interface {
 	ClaimUpdate(ctx context.Context, updateID, userID, chatID int64, kind string) (bool, error)
 	TurnByUpdate(ctx context.Context, updateID int64) (store.Turn, error)
 	BeginTurn(ctx context.Context, updateID int64, sessionID string, ownerUserID int64, promptChars int, argv []string) (int64, error)
+	UpdateTurnArgv(ctx context.Context, turnID, ownerUserID int64, argv []string) error
 	FinishTurn(ctx context.Context, turnID int64, status, threadID, reply, errMsg string, exitCode int) error
 	MarkTurnDelivered(ctx context.Context, turnID int64) error
 	MarkInterruptedTurns(ctx context.Context) (int64, error)
@@ -72,6 +73,10 @@ type Store interface {
 	SelectedSession(ctx context.Context, chatID, threadID, userID int64) (store.Session, error)
 	ModelSetting(ctx context.Context, userID, chatID, threadID int64) (string, error)
 	SetModelSetting(ctx context.Context, userID, chatID, threadID int64, model string) error
+	AddRetainedMedia(ctx context.Context, sessionID string, ownerUserID int64, path, kind string) error
+	RetainedMedia(ctx context.Context, sessionID string, ownerUserID int64) ([]store.RetainedMedia, error)
+	IncrementMediaUnrelated(ctx context.Context, id, ownerUserID int64) (bool, error)
+	DeleteRetainedMedia(ctx context.Context, id, ownerUserID int64) error
 
 	GetOffset(ctx context.Context) (int64, error)
 	AdvanceOffset(ctx context.Context, next int64) error

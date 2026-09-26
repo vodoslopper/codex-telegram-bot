@@ -349,13 +349,40 @@ func (b *Bot) cmdArchive(ctx context.Context, p *Prepared, cmd *Command, archive
 		b.sendBest(ctx, p.Scope, err.Error())
 		return nil
 	}
-	if _, err := b.st.GetSession(ctx, id, p.Scope.UserID); err != nil {
+	sess, err := b.st.GetSession(ctx, id, p.Scope.UserID)
+	if err != nil {
 		return err
+	}
+	if archive {
+		waitCtx, cancel := context.WithTimeout(ctx, b.cfg.QueueTimeout)
+		defer cancel()
+		release, err := b.wsLocks.Acquire(waitCtx, workspaceKey(sess.Workspace))
+		if err != nil {
+			return fmt.Errorf("workspace is busy; retry /archive after the active turn finishes: %w", err)
+		}
+		defer release()
 	}
 	if err := b.st.SetArchived(ctx, id, p.Scope.UserID, archive); err != nil {
 		return err
 	}
 	if archive {
+		media, err := b.st.RetainedMedia(ctx, id, p.Scope.UserID)
+		if err != nil {
+			return err
+		}
+		var cleanupErrors []error
+		for _, m := range media {
+			if err := removeMediaDirectory(sess.Workspace, m.Path); err != nil {
+				cleanupErrors = append(cleanupErrors, err)
+				continue
+			}
+			if err := b.st.DeleteRetainedMedia(ctx, m.ID, p.Scope.UserID); err != nil {
+				cleanupErrors = append(cleanupErrors, err)
+			}
+		}
+		if len(cleanupErrors) != 0 {
+			return fmt.Errorf("session archived, but some attachments could not be removed: %w", errors.Join(cleanupErrors...))
+		}
 		b.sendBest(ctx, p.Scope, fmt.Sprintf(
 			"Archived %s. It is hidden from /sessions but its Codex history is untouched; "+
 				"/sessions all still lists it and /unarchive %s brings it back.", id, id))
