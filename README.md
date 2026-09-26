@@ -308,6 +308,25 @@ answering them would confirm the bot exists to strangers.
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |
 
+Photos, documents, audio (including voice notes), and video (including video
+notes) can also start a turn. A caption is used as the prompt; without one, the
+bot asks Codex to inspect the attachment. Photos and image documents are passed
+through Codex's `--image` option. Other files are made available at a temporary
+path in the workspace and named in the prompt. The bot removes that path after
+the turn. Telegram's public Bot API limits downloads to 20 MB; larger files get
+an error before Codex runs. Codex needs suitable tools in the workspace to
+inspect or transcribe audio and video files.
+
+When Codex creates a file for the user, it includes a
+`[[telegram-file:/absolute/path/in/workspace]]` line in its final answer. The bot
+uploads each named file as a Telegram document, then sends the answer without
+those lines. Documents preserve exact bytes, including PNG transparency. Up to
+five nonempty files of at most 50 MB each can be sent per turn. Files must be in
+the configured workspace and created or modified during that turn; links out of
+the workspace and files under `.git` are rejected. Files remain in the workspace
+after delivery. If an upload fails, redelivery can retry from the stored answer
+while the file remains available.
+
 The model choice is read when each turn starts. It also applies when an existing
 Codex session resumes. Choices are stored per allowed user; topics have separate
 overrides.
@@ -730,10 +749,11 @@ know about — harmless, and unreachable.
   gets a busy answer.
 - **No approval relay.** See the security model. A task that needs an interactive
   approval cannot get one through the bot.
-- **Text only.** Photos, documents, voice notes and stickers are answered with a
-  hint and not passed to Codex, even though `codex exec` has an `--image` flag.
+- **Other media.** Stickers and other unsupported message types get a hint.
   Edited messages are ignored: re-running an agent turn because somebody fixed a
-  typo is the wrong default.
+  typo is the wrong default. A process crash can leave a temporary attachment
+  directory in the workspace; remove any stale `.codex-telegram-media-*`
+  directory after confirming no turn is using it.
 - **At-most-once, with the ambiguity described above.** A crash after Codex
   accepted a turn and before the outcome was recorded loses that turn's reply,
   and the bot cannot tell you whether the file edits landed. `/session` will show

@@ -39,12 +39,13 @@ func (b *Bot) handleText(ctx context.Context, p *Prepared) {
 // turnOutcome is what one Codex run produced, in the form the database and the
 // user both need.
 type turnOutcome struct {
-	status   string
-	reply    string
-	errMsg   string
-	res      *codexcli.Result
-	threadID string
-	exitCode int
+	status    string
+	reply     string
+	errMsg    string
+	res       *codexcli.Result
+	threadID  string
+	exitCode  int
+	startedAt time.Time
 }
 
 // runTurn executes one Codex turn for a message and reports the outcome.
@@ -102,6 +103,21 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 	if notice != "" {
 		b.sendBest(turnCtx, p.Scope, notice)
 	}
+	var imagePaths []string
+	var mediaPath string
+	if p.Media != nil {
+		path, err := plannedMediaPath(b.cfg.Workspace, p.Media.ext)
+		if err != nil {
+			b.log.Warn("could not plan Telegram media path", "error", err.Error())
+			b.sendBest(turnCtx, p.Scope, mediaFailure(err))
+			return
+		}
+		mediaPath = path
+		prompt = mediaPrompt(prompt, p.Media, path)
+		if p.Media.image {
+			imagePaths = []string{path}
+		}
+	}
 
 	model, err := b.effectiveModel(turnCtx, p.Scope)
 	if err != nil {
@@ -109,13 +125,14 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		b.sendBest(turnCtx, p.Scope, "I could not read the model setting, so I did not run Codex.")
 		return
 	}
-	req := codexcli.Request{ThreadID: sess.CodexThreadID, Prompt: prompt, Model: model}
+	prompt += fileHandoffInstruction
+	req := codexcli.Request{ThreadID: sess.CodexThreadID, Prompt: prompt, Model: model, Images: imagePaths}
 
 	// Recording the turn before starting Codex is what makes the row an honest
 	// audit trail: if the process dies here, startup finds a 'running' row and
 	// reports it as interrupted instead of the turn vanishing.
 	turnID, err := b.st.BeginTurn(turnCtx, p.UpdateID, sess.ID, p.Scope.UserID,
-		len([]rune(prompt)), b.cx.ElidedArgv(req))
+		len([]rune(p.Text)), b.cx.ElidedArgv(req))
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyClaimed) {
 			// The unique index on turns.update_id caught a duplicate that the
@@ -146,6 +163,24 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		return
 	}
 	defer releaseWS()
+	if p.Media != nil {
+		cleanup, err := b.stageMedia(turnCtx, p.Media, mediaPath)
+		if err != nil {
+			b.log.Warn("could not prepare Telegram media", "kind", p.Media.kind, "error", err.Error())
+			status := store.TurnFailed
+			if errors.Is(err, context.Canceled) {
+				status = store.TurnCancelled
+			}
+			afterCtx, cancelAfter := context.WithTimeout(context.WithoutCancel(ctx), afterTurnTimeout)
+			defer cancelAfter()
+			if ferr := b.st.FinishTurn(afterCtx, turnID, status, "", "", "attachment preparation failed", 0); ferr != nil {
+				b.log.Error("could not record attachment failure", "turn_id", turnID, "error", ferr.Error())
+			}
+			b.sendBest(afterCtx, p.Scope, mediaFailure(err))
+			return
+		}
+		defer cleanup()
+	}
 
 	// From here the wait is over and only Codex can make this slow, so this is
 	// where a "still working" acknowledgement starts to be worth sending.
@@ -164,8 +199,9 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		"turn_id", turnID, "session_id", sess.ID,
 		"update_id", p.UpdateID, "message_id", p.MessageID,
 		"resume", req.IsResume(), "thread_id", req.ThreadID,
-		"prompt_chars", len([]rune(prompt)), "sandbox", b.cx.Sandbox(), "model", req.Model)
+		"prompt_chars", len([]rune(p.Text)), "sandbox", b.cx.Sandbox(), "model", req.Model)
 
+	startedAt := time.Now().Add(-2 * time.Second)
 	res, runErr := b.cx.Run(turnCtx, req)
 	finished.Store(true)
 	if ackTimer != nil {
@@ -185,6 +221,7 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 	}
 
 	out := b.classify(runErr, res)
+	out.startedAt = startedAt
 	if runErr != nil {
 		b.log.Warn("a codex turn did not succeed",
 			"turn_id", turnID, "session_id", sess.ID, "status", out.status,
@@ -246,9 +283,18 @@ func (b *Bot) finish(ctx context.Context, p *Prepared, sess store.Session, turnI
 	if text == "" {
 		return
 	}
-	if err := b.send(ctx, p.Scope, text); err != nil {
+	var err error
+	if out.status == store.TurnCompleted {
+		err = b.deliverReply(ctx, p.Scope, text, out.startedAt)
+	} else {
+		err = b.send(ctx, p.Scope, text)
+	}
+	if err != nil {
 		b.log.Error("could not deliver a turn result",
 			"turn_id", turnID, "status", out.status, "error", err.Error())
+		if out.status == store.TurnCompleted {
+			b.sendBest(ctx, p.Scope, "I could not deliver the generated file or the full reply. The file remains in the workspace; please retry or check the bot log.")
+		}
 		return
 	}
 	// Only now is the reply known to have reached Telegram. This flag is what

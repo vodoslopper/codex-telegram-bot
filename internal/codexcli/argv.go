@@ -44,6 +44,8 @@ type Request struct {
 	Prompt string
 	// Model overrides the runner's configured model for this turn.
 	Model string
+	// Images are local image files passed to Codex as direct attachments.
+	Images []string
 }
 
 // IsResume reports whether this request continues an existing thread.
@@ -140,6 +142,9 @@ func (r *Runner) Argv(req Request) ([]string, error) {
 	}
 	if model != "" {
 		a = append(a, "-m", model)
+	}
+	for _, path := range req.Images {
+		a = append(a, "-i", path)
 	}
 	return append(a, "--", req.Prompt), nil
 }

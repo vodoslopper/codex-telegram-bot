@@ -451,6 +451,8 @@ type Sent struct {
 	ChatID   int64
 	ThreadID int64
 	Text     string
+	Document string
+	Data     []byte
 }
 
 // FakeTelegram is an in-memory Bot API.
@@ -463,6 +465,7 @@ type FakeTelegram struct {
 	sent     []Sent
 	actions  []string
 	updates  []telegram.Update
+	files    map[string][]byte
 	nextID   int64
 	me       telegram.User
 	webhook  telegram.WebhookInfo
@@ -475,9 +478,27 @@ type FakeTelegram struct {
 func NewFakeTelegram() *FakeTelegram {
 	return &FakeTelegram{
 		nextID:  1000,
+		files:   make(map[string][]byte),
 		me:      telegram.User{ID: 42, FirstName: "Codex", Username: "codex_test_bot"},
 		webhook: telegram.WebhookInfo{URL: "https://example.invalid/hook", PendingUpdateCount: 3},
 	}
+}
+
+// SetFile makes a Telegram file id downloadable by the fake.
+func (f *FakeTelegram) SetFile(id string, data []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.files[id] = append([]byte(nil), data...)
+}
+
+func (f *FakeTelegram) DownloadFile(_ context.Context, fileID string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.files[fileID]
+	if !ok {
+		return nil, fmt.Errorf("fake Telegram: unknown file %q", fileID)
+	}
+	return append([]byte(nil), data...), nil
 }
 
 // Username is the bot username the fake reports from getMe.
@@ -561,6 +582,21 @@ func (f *FakeTelegram) SendMessage(_ context.Context, chatID, threadID int64, te
 	}
 	f.nextID++
 	f.sent = append(f.sent, Sent{ChatID: chatID, ThreadID: threadID, Text: text})
+	return &telegram.SentMessage{MessageID: f.nextID}, nil
+}
+
+func (f *FakeTelegram) SendDocument(_ context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		return nil, f.sendErr
+	}
+	f.nextID++
+	f.sent = append(f.sent, Sent{ChatID: chatID, ThreadID: threadID, Document: filepath.Base(path), Data: data})
 	return &telegram.SentMessage{MessageID: f.nextID}, nil
 }
 

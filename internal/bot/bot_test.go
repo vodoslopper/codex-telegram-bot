@@ -110,7 +110,7 @@ func TestAcceptanceScenario(t *testing.T) {
 		t.Errorf("the first reply = %q", reply)
 	}
 	wantArgv := []string{"exec", "--json", "--strict-config", "--sandbox", "workspace-write",
-		"-m", "gpt-6-sol", "--", "Summarize this repository"}
+		"-m", "gpt-6-sol", "--", "Summarize this repository" + fileHandoffInstruction}
 	if got := h.fake.Argv(t, 1); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("the first turn ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
@@ -132,7 +132,7 @@ func TestAcceptanceScenario(t *testing.T) {
 		t.Errorf("the resumed reply = %q", reply)
 	}
 	wantArgv = []string{"exec", "resume", threadOne, "--json", "--strict-config",
-		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "Now inspect the spec file"}
+		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "Now inspect the spec file" + fileHandoffInstruction}
 	if got := h.fake.Argv(t, 2); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("the resumed turn ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
@@ -177,7 +177,7 @@ func TestAcceptanceScenario(t *testing.T) {
 		t.Errorf("after a restart the reply = %q; the resume path was not taken", reply)
 	}
 	wantArgv = []string{"exec", "resume", threadOne, "--json", "--strict-config",
-		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "What did we discuss?"}
+		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "What did we discuss?" + fileHandoffInstruction}
 	if got := restarted.fake.Argv(t, 3); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("after a restart codex ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
@@ -290,7 +290,7 @@ func TestNonTextMessageGetsAHint(t *testing.T) {
 	h := newHarness(t, harnessOpts{spec: successSpec("answer", "answer")})
 	u := msg(1, aliceChat, aliceID, "")
 	got := h.text(u)
-	if !strings.Contains(got, "plain text") {
+	if !strings.Contains(got, "text, photos, documents, audio and video") {
 		t.Errorf("a message with no text got %q", got)
 	}
 	if n := len(h.fake.Invocations(t)); n != 0 {

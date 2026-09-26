@@ -41,6 +41,8 @@ import (
 // in-memory fake.
 type Telegram interface {
 	SendMessage(ctx context.Context, chatID, threadID int64, text string) (*telegram.SentMessage, error)
+	SendDocument(ctx context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error)
+	DownloadFile(ctx context.Context, fileID string) ([]byte, error)
 	SendChatAction(ctx context.Context, chatID, threadID int64, action string) error
 	GetUpdates(ctx context.Context, offset int64, pollTimeout time.Duration, limit int) ([]telegram.Update, error)
 	GetMe(ctx context.Context) (*telegram.User, error)
@@ -185,8 +187,10 @@ type Prepared struct {
 	Cmd *Command
 	// Text is the message text, for a plain (non-command) message.
 	Text string
+	// Media is one supported attachment accompanying the caption.
+	Media *mediaAttachment
 	// Unsupported is set for an authorized private text message the bot cannot
-	// act on (a sticker, a photo, an empty message).
+	// act on (a sticker or an empty message).
 	Unsupported bool
 	// Duplicate is set when the update id was already claimed by an earlier
 	// run of this bot. Nothing is executed for it; an undelivered reply may
@@ -242,7 +246,15 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 	p := &Prepared{UpdateID: u.UpdateID, MessageID: msg.MessageID, Scope: scope}
 
 	text := msg.Text
+	p.Media = attachmentOf(msg)
 	switch {
+	case p.Media != nil:
+		p.Text = msg.Caption
+		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, "media:"+p.Media.kind)
+		if err != nil {
+			return nil, err
+		}
+		p.Duplicate = !claimed
 	case strings.TrimSpace(text) == "":
 		p.Unsupported = true
 		// The error is propagated here, unlike the drop paths above: this
@@ -307,7 +319,7 @@ func (b *Bot) Handle(ctx context.Context, p *Prepared) {
 	}
 	switch {
 	case p.Unsupported:
-		b.send(ctx, p.Scope, "I only handle plain text messages. Send /help for the commands.")
+		b.send(ctx, p.Scope, "I handle text, photos, documents, audio and video. Send /help for the commands.")
 	case p.Cmd != nil:
 		b.handleCommand(ctx, p)
 	default:
@@ -351,7 +363,7 @@ func (b *Bot) recoverUndelivered(ctx context.Context, p *Prepared) {
 	}
 	b.log.Warn("redelivering a reply whose delivery was never confirmed",
 		"update_id", p.UpdateID, "turn_id", t.ID, "session_id", t.SessionID)
-	if err := b.send(ctx, p.Scope, t.Reply); err != nil {
+	if err := b.deliverReply(ctx, p.Scope, t.Reply, t.StartedAt); err != nil {
 		b.log.Error("redelivery failed", "update_id", p.UpdateID, "error", err.Error())
 		return
 	}

@@ -50,12 +50,35 @@ func (u Update) Kind() string {
 
 // Message is a Telegram message.
 type Message struct {
-	MessageID       int64  `json:"message_id"`
-	MessageThreadID int64  `json:"message_thread_id"`
-	Date            int64  `json:"date"`
-	Text            string `json:"text"`
-	From            *User  `json:"from"`
-	Chat            Chat   `json:"chat"`
+	MessageID       int64       `json:"message_id"`
+	MessageThreadID int64       `json:"message_thread_id"`
+	Date            int64       `json:"date"`
+	Text            string      `json:"text"`
+	Caption         string      `json:"caption"`
+	Photo           []PhotoSize `json:"photo"`
+	Document        *MediaFile  `json:"document"`
+	Audio           *MediaFile  `json:"audio"`
+	Voice           *MediaFile  `json:"voice"`
+	Video           *MediaFile  `json:"video"`
+	VideoNote       *MediaFile  `json:"video_note"`
+	From            *User       `json:"from"`
+	Chat            Chat        `json:"chat"`
+}
+
+// PhotoSize is one resolution of a Telegram photo.
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	FileSize int64  `json:"file_size"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// MediaFile is the common metadata of document, audio, voice and video files.
+type MediaFile struct {
+	FileID   string `json:"file_id"`
+	FileSize int64  `json:"file_size"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
 }
 
 // ThreadID returns the topic id, or 0 when the chat has no topics.
