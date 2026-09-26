@@ -43,6 +43,9 @@ func TestLoadAcceptsAValidEnvironment(t *testing.T) {
 	if cfg.SandboxMode != DefaultSandboxMode {
 		t.Errorf("SandboxMode = %q, want %q", cfg.SandboxMode, DefaultSandboxMode)
 	}
+	if cfg.Model != DefaultModel {
+		t.Errorf("Model = %q, want %q", cfg.Model, DefaultModel)
+	}
 	if cfg.TurnTimeout != DefaultTurnTimeout {
 		t.Errorf("TurnTimeout = %s, want %s", cfg.TurnTimeout, DefaultTurnTimeout)
 	}
@@ -75,6 +78,15 @@ func TestLoadAcceptsAValidEnvironment(t *testing.T) {
 	}
 	if cfg.Allowed(333) {
 		t.Error("Allowed(333) = true for an id that is not on the list")
+	}
+}
+
+func TestLoadRejectsUnsupportedModel(t *testing.T) {
+	env := withValidToken(baseEnv(t))
+	env["BOT_CODEX_MODEL"] = "gpt-6-astra"
+	_, err := Load(env)
+	if err == nil || !strings.Contains(err.Error(), "BOT_CODEX_MODEL") {
+		t.Fatalf("Load with unsupported model: %v", err)
 	}
 }
 
@@ -310,7 +322,7 @@ func TestLoadAcceptsAndAppliesKnobs(t *testing.T) {
 	env["BOT_CODEX_STRICT_CONFIG"] = "false"
 	env["BOT_CHECK_CODEX_LOGIN"] = "false"
 	env["BOT_QUEUE_TIMEOUT"] = "90s"
-	env["BOT_CODEX_MODEL"] = "gpt-5-codex"
+	env["BOT_CODEX_MODEL"] = "gpt-6-luna"
 	env["BOT_TELEGRAM_API_BASE"] = "http://127.0.0.1:1/"
 
 	cfg, err := Load(env)
@@ -337,7 +349,7 @@ func TestLoadAcceptsAndAppliesKnobs(t *testing.T) {
 	if cfg.QueueTimeout != 90*time.Second {
 		t.Errorf("QueueTimeout = %s", cfg.QueueTimeout)
 	}
-	if cfg.Model != "gpt-5-codex" {
+	if cfg.Model != "gpt-6-luna" {
 		t.Errorf("Model = %q", cfg.Model)
 	}
 	if cfg.TelegramAPIBase != "http://127.0.0.1:1" {

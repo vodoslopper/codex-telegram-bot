@@ -171,11 +171,16 @@ func TestArgvNoShellIsInvolved(t *testing.T) {
 }
 
 func TestArgvWithModel(t *testing.T) {
-	r := testRunner(t, func(c *Config) { c.Model = "gpt-5-codex" })
+	r := testRunner(t, func(c *Config) { c.Model = "gpt-6-sol" })
 	got := r.mustArgv(t, Request{Prompt: "x"})
 	i := slices.Index(got, "-m")
-	if i < 0 || got[i+1] != "gpt-5-codex" {
-		t.Errorf("argv is missing `-m gpt-5-codex`: %q", got)
+	if i < 0 || got[i+1] != "gpt-6-sol" {
+		t.Errorf("argv is missing `-m gpt-6-sol`: %q", got)
+	}
+	got = r.mustArgv(t, Request{Prompt: "x", Model: "gpt-6-luna"})
+	i = slices.Index(got, "-m")
+	if i < 0 || got[i+1] != "gpt-6-luna" {
+		t.Errorf("request model did not override runner model: %q", got)
 	}
 }
 

@@ -249,7 +249,7 @@ a container, or a shell, and no secret ever appears on a command line.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BOT_SANDBOX_MODE` | `workspace-write` | `workspace-write` or `read-only`. `danger-full-access` is refused outright. |
-| `BOT_CODEX_MODEL` | *(unset)* | Passed as `-m`. |
+| `BOT_CODEX_MODEL` | `gpt-6-sol` | Baseline model; `gpt-6-sol` or `gpt-6-luna`. Passed as `-m`. |
 | `BOT_CODEX_STRICT_CONFIG` | `true` | Pass `--strict-config`. |
 | `BOT_CHECK_CODEX_LOGIN` | `true` | Probe `codex login status` at startup and warn. |
 | `BOT_TURN_TIMEOUT` | `15m` | Per-turn deadline, 30s..24h. |
@@ -300,10 +300,17 @@ answering them would confirm the bot exists to strangers.
 | `/sessions [all]` | List **your** sessions; `all` includes archived ones. `*` marks the selected one. |
 | `/use <id>` | Switch this chat (and topic) to one of your sessions. |
 | `/session` | The selected session, workspace, Codex thread, and running/idle status. `/status` and `/current` are aliases. |
+| `/model` | Show the effective GPT-6 model in this chat or topic. |
+| `/model luna` or `/model sol` | Save a model override for this chat or topic. `/model reset` restores inheritance. |
+| `/model default luna` or `/model default sol` | Save your default model for chats and topics without an override. `/model default reset` restores `BOT_CODEX_MODEL`. |
 | `/rename <id> <name>` | Relabel a session. |
 | `/archive <id>` | Hide a session from `/sessions`. Codex history is untouched; `/unarchive <id>` brings it back. |
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |
+
+The model choice is read when each turn starts. It also applies when an existing
+Codex session resumes. Choices are stored per allowed user; topics have separate
+overrides.
 
 ### Two different kinds of id
 
@@ -345,10 +352,10 @@ on Linux. `internal/codexcli/argv_test.go` pins them, so a change fails a test.
 **First turn of a session** (no stored thread id):
 
 ```
-codex exec --json --strict-config --sandbox workspace-write -- <PROMPT>
+codex exec --json --strict-config --sandbox workspace-write -m gpt-6-sol -- <PROMPT>
 ```
 
-with the model flag inserted before `--` when `BOT_CODEX_MODEL` is set:
+with the effective model flag inserted before `--`:
 
 ```
 codex exec --json --strict-config --sandbox workspace-write -m <MODEL> -- <PROMPT>
@@ -357,7 +364,7 @@ codex exec --json --strict-config --sandbox workspace-write -m <MODEL> -- <PROMP
 **Every later turn of that session** (resuming the exact stored UUID):
 
 ```
-codex exec resume <STORED_THREAD_UUID> --json --strict-config -c sandbox_mode="workspace-write" -- <PROMPT>
+codex exec resume <STORED_THREAD_UUID> --json --strict-config -c sandbox_mode="workspace-write" -m gpt-6-sol -- <PROMPT>
 ```
 
 Both run with the child process's working directory set to `BOT_WORKSPACE`,

@@ -42,6 +42,8 @@ type Request struct {
 	ThreadID string
 	// Prompt is the user's text. It is passed as one argv element.
 	Prompt string
+	// Model overrides the runner's configured model for this turn.
+	Model string
 }
 
 // IsResume reports whether this request continues an existing thread.
@@ -132,8 +134,12 @@ func (r *Runner) Argv(req Request) ([]string, error) {
 	} else {
 		a = append(a, "--sandbox", r.cfg.Sandbox)
 	}
-	if r.cfg.Model != "" {
-		a = append(a, "-m", r.cfg.Model)
+	model := r.cfg.Model
+	if req.Model != "" {
+		model = req.Model
+	}
+	if model != "" {
+		a = append(a, "-m", model)
 	}
 	return append(a, "--", req.Prompt), nil
 }

@@ -68,6 +68,8 @@ type Store interface {
 	TouchLastTurn(ctx context.Context, id string, ownerUserID int64, at time.Time) error
 	SelectSession(ctx context.Context, chatID, threadID, userID int64, sessionID string) error
 	SelectedSession(ctx context.Context, chatID, threadID, userID int64) (store.Session, error)
+	ModelSetting(ctx context.Context, userID, chatID, threadID int64) (string, error)
+	SetModelSetting(ctx context.Context, userID, chatID, threadID int64, model string) error
 
 	GetOffset(ctx context.Context) (int64, error)
 	AdvanceOffset(ctx context.Context, next int64) error

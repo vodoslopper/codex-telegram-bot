@@ -45,6 +45,8 @@ func (b *Bot) handleCommand(ctx context.Context, p *Prepared) {
 		err = b.cmdUse(ctx, p, cmd)
 	case "session", "status", "current":
 		err = b.cmdSession(ctx, p)
+	case "model":
+		err = b.cmdModel(ctx, p, cmd)
 	case "rename":
 		err = b.cmdRename(ctx, p, cmd)
 	case "archive":
@@ -99,6 +101,9 @@ func (b *Bot) helpText(ctx context.Context, scope Scope, greeting bool) string {
 /sessions [all]     list your sessions (all includes archived)
 /use <id>           switch to one of your sessions
 /session            show the selected session, workspace and status
+/model              show the model used in this chat or topic
+/model luna|sol     select a model here; /model reset inherits your default
+/model default luna|sol  set your default for other chats and topics
 /rename <id> <name> rename a session
 /archive <id>       hide a session from /sessions (Codex history is kept)
 /unarchive <id>     show an archived session again
@@ -116,6 +121,9 @@ func (b *Bot) helpText(ctx context.Context, scope Scope, greeting bool) string {
 	}
 	fmt.Fprintf(&sb, "Workspace: %s\n", b.cfg.Workspace)
 	fmt.Fprintf(&sb, "Sandbox: %s\n", b.cx.Sandbox())
+	if model, err := b.effectiveModel(ctx, scope); err == nil {
+		fmt.Fprintf(&sb, "Model: %s\n", model)
+	}
 	if b.codexVersion != "" {
 		fmt.Fprintf(&sb, "Codex: %s\n", b.codexVersion)
 	}

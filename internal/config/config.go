@@ -29,6 +29,7 @@ import (
 const (
 	DefaultTelegramAPIBase = "https://api.telegram.org"
 	DefaultSandboxMode     = "workspace-write"
+	DefaultModel           = "gpt-6-sol"
 	DefaultTurnTimeout     = 15 * time.Minute
 	DefaultAckAfter        = 10 * time.Second
 	DefaultTypingInterval  = 4 * time.Second
@@ -119,7 +120,7 @@ func Load(env map[string]string) (*Config, error) {
 	cfg := &Config{
 		TelegramAPIBase: orDefault(get("BOT_TELEGRAM_API_BASE"), DefaultTelegramAPIBase),
 		SandboxMode:     orDefault(get("BOT_SANDBOX_MODE"), DefaultSandboxMode),
-		Model:           get("BOT_CODEX_MODEL"),
+		Model:           orDefault(get("BOT_CODEX_MODEL"), DefaultModel),
 		LogLevel:        orDefault(get("BOT_LOG_LEVEL"), "info"),
 		PollLimit:       DefaultPollLimit,
 		MaxConcurrent:   DefaultMaxConcurrent,
@@ -201,6 +202,9 @@ func Load(env map[string]string) (*Config, error) {
 	}
 
 	// --- optional knobs ----------------------------------------------------
+	if cfg.Model != "gpt-6-luna" && cfg.Model != "gpt-6-sol" {
+		fail("BOT_CODEX_MODEL=%q is not supported; use gpt-6-luna or gpt-6-sol", cfg.Model)
+	}
 
 	if v := get("BOT_SANDBOX_MODE"); v != "" && !slices.Contains(allowedSandboxModes, cfg.SandboxMode) {
 		fail("BOT_SANDBOX_MODE=%q is not allowed; use one of %s (danger-full-access is rejected on purpose)",

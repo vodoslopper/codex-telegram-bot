@@ -103,7 +103,13 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		b.sendBest(turnCtx, p.Scope, notice)
 	}
 
-	req := codexcli.Request{ThreadID: sess.CodexThreadID, Prompt: prompt}
+	model, err := b.effectiveModel(turnCtx, p.Scope)
+	if err != nil {
+		b.log.Error("could not resolve model setting", "error", err.Error())
+		b.sendBest(turnCtx, p.Scope, "I could not read the model setting, so I did not run Codex.")
+		return
+	}
+	req := codexcli.Request{ThreadID: sess.CodexThreadID, Prompt: prompt, Model: model}
 
 	// Recording the turn before starting Codex is what makes the row an honest
 	// audit trail: if the process dies here, startup finds a 'running' row and
@@ -158,7 +164,7 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		"turn_id", turnID, "session_id", sess.ID,
 		"update_id", p.UpdateID, "message_id", p.MessageID,
 		"resume", req.IsResume(), "thread_id", req.ThreadID,
-		"prompt_chars", len([]rune(prompt)), "sandbox", b.cx.Sandbox())
+		"prompt_chars", len([]rune(prompt)), "sandbox", b.cx.Sandbox(), "model", req.Model)
 
 	res, runErr := b.cx.Run(turnCtx, req)
 	finished.Store(true)

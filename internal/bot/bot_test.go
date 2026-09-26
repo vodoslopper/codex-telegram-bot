@@ -110,7 +110,7 @@ func TestAcceptanceScenario(t *testing.T) {
 		t.Errorf("the first reply = %q", reply)
 	}
 	wantArgv := []string{"exec", "--json", "--strict-config", "--sandbox", "workspace-write",
-		"--", "Summarize this repository"}
+		"-m", "gpt-6-sol", "--", "Summarize this repository"}
 	if got := h.fake.Argv(t, 1); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("the first turn ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
@@ -132,7 +132,7 @@ func TestAcceptanceScenario(t *testing.T) {
 		t.Errorf("the resumed reply = %q", reply)
 	}
 	wantArgv = []string{"exec", "resume", threadOne, "--json", "--strict-config",
-		"-c", `sandbox_mode="workspace-write"`, "--", "Now inspect the spec file"}
+		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "Now inspect the spec file"}
 	if got := h.fake.Argv(t, 2); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("the resumed turn ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
@@ -177,7 +177,7 @@ func TestAcceptanceScenario(t *testing.T) {
 		t.Errorf("after a restart the reply = %q; the resume path was not taken", reply)
 	}
 	wantArgv = []string{"exec", "resume", threadOne, "--json", "--strict-config",
-		"-c", `sandbox_mode="workspace-write"`, "--", "What did we discuss?"}
+		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "What did we discuss?"}
 	if got := restarted.fake.Argv(t, 3); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("after a restart codex ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
