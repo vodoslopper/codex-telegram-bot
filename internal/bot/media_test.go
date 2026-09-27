@@ -131,11 +131,14 @@ func TestArchiveRemovesRetainedMedia(t *testing.T) {
 	if err != nil || len(media) != 0 {
 		t.Fatalf("archive left media rows: %+v, %v", media, err)
 	}
-	// A new attachment sent to a still-selected archived session is temporary.
+	// The archived session was deselected, so a later attachment starts a new one.
 	h.tg.SetFile("another", []byte("another image"))
 	u = msg(3, aliceChat, aliceID, "")
 	u.Message.Photo = []telegram.PhotoSize{{FileID: "another", Width: 320, Height: 240}}
 	h.text(u)
+	if selected(t, h, aliceChat, 0, aliceID) == sessionID {
+		t.Fatal("attachment after archive reused the hidden session")
+	}
 	media, err = h.st.RetainedMedia(context.Background(), sessionID, aliceID)
 	if err != nil || len(media) != 0 {
 		t.Fatalf("archived session retained new media: %+v, %v", media, err)

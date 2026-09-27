@@ -250,6 +250,10 @@ func (b *Bot) cmdSession(ctx context.Context, p *Prepared) error {
 	sess, err := b.st.SelectedSession(ctx, p.Scope.ChatID, p.Scope.ThreadID, p.Scope.UserID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			if t := b.inflight.get(p.Scope); t != nil {
+				b.sendBest(ctx, p.Scope, "A prompt is queued in this chat. Its session has not been created yet; send /stop to cancel it.")
+				return nil
+			}
 			b.sendBest(ctx, p.Scope, "No session is selected here. Send /new [name] to create one, "+
 				"or just send a message and I will start one.")
 			return nil
@@ -288,8 +292,16 @@ func (b *Bot) statusText(ctx context.Context, scope Scope, sess store.Session) s
 	if t := b.inflight.get(scope); t != nil {
 		sessionID, _ := t.ids()
 		if sessionID == sess.ID {
+			_, running := t.state()
+			if !running {
+				return fmt.Sprintf("queued for %s here (waiting %s) — /stop to cancel",
+					sessionID, b.now().Sub(t.started).Round(time.Second))
+			}
 			return fmt.Sprintf("running for %s here (started %s ago) — /stop to cancel",
 				sessionID, b.now().Sub(t.started).Round(time.Second))
+		}
+		if sessionID == "" {
+			return "idle, but another prompt is queued in this chat — /stop to cancel"
 		}
 		return fmt.Sprintf("idle, but %s is running in this chat — /stop to cancel", sessionID)
 	}
@@ -388,7 +400,7 @@ func (b *Bot) cmdArchive(ctx context.Context, p *Prepared, cmd *Command, archive
 			return fmt.Errorf("session archived, but some attachments could not be removed: %w", errors.Join(cleanupErrors...))
 		}
 		b.sendBest(ctx, p.Scope, fmt.Sprintf(
-			"Archived %s. It is hidden from /sessions but its Codex history is untouched; "+
+			"Archived %s and cleared its chat and topic selections. Where it was selected, the next message starts a new session unless you select another. Its Codex history is untouched; "+
 				"/sessions all still lists it and /unarchive %s brings it back.", id, id))
 	} else {
 		b.sendBest(ctx, p.Scope, fmt.Sprintf("Unarchived %s.", id))
@@ -415,6 +427,10 @@ func (b *Bot) cmdStop(ctx context.Context, p *Prepared) {
 		"user_id", p.Scope.UserID, "chat_id", p.Scope.ChatID,
 		"thread_id", p.Scope.ThreadID, "session_id", sessionID, "turn_id", turnID)
 	t.cancel()
+	if sessionID == "" {
+		b.sendBest(ctx, p.Scope, "Cancelling the queued turn. No session has been assigned to it yet.")
+		return
+	}
 	b.sendBest(ctx, p.Scope, fmt.Sprintf(
 		"Cancelling the turn on %s. The session itself is kept and can be resumed.", sessionID))
 }

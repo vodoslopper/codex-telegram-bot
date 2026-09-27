@@ -164,9 +164,10 @@ func (b *Bot) dispatch(_ context.Context, p *Prepared) {
 		}
 	}
 	stop := p.Cmd != nil && (p.Cmd.Name == "stop" || p.Cmd.Name == "cancel")
+	liveRead := p.Cmd != nil && b.inflight.get(p.Scope) != nil && liveReadCommand(p.Cmd)
 	var previous <-chan struct{}
 	var done chan struct{}
-	if !stop && !p.busy {
+	if !stop && !liveRead && !p.busy {
 		b.dispatchMu.Lock()
 		previous = b.dispatchTail[p.Scope]
 		done = make(chan struct{})
@@ -205,6 +206,9 @@ func (b *Bot) dispatch(_ context.Context, p *Prepared) {
 			}
 		}()
 		if previous != nil {
+			if p.admitted && p.turnCtx.Err() == nil {
+				b.sendBest(p.turnCtx, p.Scope, "⏳ Queued behind an earlier message in this chat. Send /stop to cancel the active turn.")
+			}
 			waitCtx := ctx
 			if p.turnCtx != nil {
 				waitCtx = p.turnCtx
@@ -231,6 +235,19 @@ func (b *Bot) dispatch(_ context.Context, p *Prepared) {
 		}
 		b.Handle(ctx, p)
 	}()
+}
+
+// Live read commands may inspect current state while a turn is running. State
+// changing commands remain ordered behind the turn they could affect.
+func liveReadCommand(cmd *Command) bool {
+	switch cmd.Name {
+	case "start", "help", "commands", "sessions", "ls", "session", "status", "current", "usage":
+		return true
+	case "model":
+		return len(cmd.Args) == 0
+	default:
+		return false
+	}
 }
 
 // nextBackoff doubles a delay from 1s up to maxPollBackoff, with jitter so

@@ -383,6 +383,9 @@ func TestArchiveHidesWithoutDeleting(t *testing.T) {
 	if list := h.text(msg(4, aliceChat, aliceID, "/sessions")); strings.Contains(list, id) {
 		t.Errorf("an archived session is still listed:\n%s", list)
 	}
+	if _, err := h.st.GetSelection(context.Background(), aliceChat, 0, aliceID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("archived session is still selected: %v", err)
+	}
 	if list := h.text(msg(5, aliceChat, aliceID, "/sessions all")); !strings.Contains(list, id) {
 		t.Errorf("`/sessions all` does not list the archived session:\n%s", list)
 	}
@@ -789,6 +792,13 @@ func TestStopTargetsActiveTurnBeforeQueuedTurn(t *testing.T) {
 		h.b.dispatch(context.Background(), p)
 	}
 	h.fake.WaitForEmitted(t, 1, 15*time.Second)
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(h.tg.AllText(), "Queued behind an earlier message") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(h.tg.AllText(), "Queued behind an earlier message") {
+		t.Fatal("the queued turn was not acknowledged")
+	}
 	for _, updateID := range []int64{4, 5} {
 		if updateID == 5 {
 			h.fake.WaitForEmitted(t, 2, 15*time.Second)
@@ -819,6 +829,52 @@ func TestStopTargetsActiveTurnBeforeQueuedTurn(t *testing.T) {
 	}
 	if len(statuses) != 2 || statuses[0] != store.TurnCancelled || statuses[1] != store.TurnCancelled {
 		t.Fatalf("turn statuses after consecutive /stop commands: %v", statuses)
+	}
+}
+
+func TestSessionReportsActiveTurnBeforeItFinishes(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: slowSpec()})
+	newSession(t, h, 1, aliceChat, aliceID, "live status")
+	turn, err := h.b.Claim(context.Background(), msg(2, aliceChat, aliceID, "slow task"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), turn)
+	h.fake.WaitForEmitted(t, 1, 15*time.Second)
+	status, err := h.b.Claim(context.Background(), msg(3, aliceChat, aliceID, "/session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), status)
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(h.tg.AllText(), "Status: running") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(h.tg.AllText(), "Status: running") {
+		t.Fatal("/session waited behind the active turn")
+	}
+	stop, err := h.b.Claim(context.Background(), msg(4, aliceChat, aliceID, "/stop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), stop)
+	h.b.Wait()
+}
+
+func TestStopBeforeSessionAssignmentHasCompleteMessage(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	scope := Scope{ChatID: aliceChat, UserID: aliceID}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entry := &inflightTurn{cancel: cancel, started: time.Now()}
+	h.b.inflight.register(scope, entry)
+	defer h.b.inflight.clear(scope, entry)
+	h.b.cmdStop(context.Background(), &Prepared{Scope: scope})
+	if got := h.tg.AllText(); !strings.Contains(got, "No session has been assigned") {
+		t.Fatalf("/stop before session assignment replied %q", got)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("/stop did not cancel the queued turn")
 	}
 }
 

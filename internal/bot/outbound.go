@@ -28,18 +28,39 @@ func (b *Bot) deliverReply(ctx context.Context, scope Scope, reply string, start
 			body = append(body, line)
 		}
 	}
+	omitted := 0
 	if len(paths) > 5 {
-		return fmt.Errorf("reply names %d files; limit is 5", len(paths))
+		omitted = len(paths) - 5
+		paths = paths[:5]
 	}
+	var valid []string
 	for _, path := range paths {
 		if err := b.validateOutboundFile(path, startedAt); err != nil {
-			return err
+			omitted++
+			b.log.Warn("generated file could not be attached", "error", err.Error())
+			continue
 		}
+		valid = append(valid, path)
+	}
+	for _, path := range valid {
 		if _, err := b.tg.SendDocument(ctx, scope.ChatID, scope.ThreadID, path); err != nil {
 			return fmt.Errorf("send document: %w", err)
 		}
 	}
-	return b.send(ctx, scope, strings.Join(body, "\n"))
+	text := strings.TrimSpace(strings.Join(body, "\n"))
+	if omitted > 0 {
+		unit := "file"
+		if omitted != 1 {
+			unit = "files"
+		}
+		note := fmt.Sprintf("I could not attach %d generated %s: missing or beyond the file limits. Check the bot log for details.", omitted, unit)
+		if text != "" {
+			text += "\n\n" + note
+		} else {
+			text = note
+		}
+	}
+	return b.send(ctx, scope, text)
 }
 
 func isRelatedMediaLine(line string) bool {

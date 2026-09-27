@@ -200,21 +200,35 @@ func (s *Store) RenameSession(ctx context.Context, id string, ownerUserID int64,
 	return expectOneRow(res, fmt.Sprintf("session %q", id))
 }
 
-// SetArchived hides or un-hides a session without touching Codex history. The
-// thread stays on disk under CODEX_HOME and can be resumed after unarchiving;
-// archiving only changes what /sessions lists and nothing in Codex.
+// SetArchived hides or un-hides a session without touching Codex history. An
+// archived session is also deselected in every chat and topic, so the next
+// prompt cannot silently continue a session hidden from /sessions.
 func (s *Store) SetArchived(ctx context.Context, id string, ownerUserID int64, archived bool) error {
 	v := 0
 	if archived {
 		v = 1
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: archive session %q: %w", id, err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET archived = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?`,
 		v, s.timestamp(), id, ownerUserID)
 	if err != nil {
 		return fmt.Errorf("store: archive session %q: %w", id, err)
 	}
-	return expectOneRow(res, fmt.Sprintf("session %q", id))
+	if err := expectOneRow(res, fmt.Sprintf("session %q", id)); err != nil {
+		return err
+	}
+	if archived {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM selections WHERE session_id = ? AND user_id = ?`, id, ownerUserID); err != nil {
+			return fmt.Errorf("store: deselect archived session %q: %w", id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // SetThreadID records the Codex thread a session points at.

@@ -51,7 +51,7 @@ func TestDeliverReplyUploadsFileAndStripsMarker(t *testing.T) {
 	}
 }
 
-func TestDeliverReplyRejectsOutsideAndStaleFiles(t *testing.T) {
+func TestDeliverReplySkipsInvalidFilesAndKeepsText(t *testing.T) {
 	h := newHarness(t, harnessOpts{})
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
@@ -62,19 +62,38 @@ func TestDeliverReplyRejectsOutsideAndStaleFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{outside, link} {
-		err := h.b.deliverReply(context.Background(), Scope{ChatID: aliceChat}, "[[telegram-file:"+path+"]]", time.Now().Add(-time.Minute))
-		if err == nil || !strings.Contains(err.Error(), "outside") {
-			t.Errorf("path %q: error = %v", path, err)
+		err := h.b.deliverReply(context.Background(), Scope{ChatID: aliceChat}, "Answer preserved.\n[[telegram-file:"+path+"]]", time.Now().Add(-time.Minute))
+		if err != nil {
+			t.Errorf("path %q: deliverReply = %v", path, err)
 		}
 	}
 	stale := filepath.Join(h.ws, "old.txt")
 	if err := os.WriteFile(stale, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.b.deliverReply(context.Background(), Scope{ChatID: aliceChat}, "[[telegram-file:"+stale+"]]", time.Now().Add(time.Minute)); err == nil || !strings.Contains(err.Error(), "predates") {
-		t.Errorf("stale file error = %v", err)
+	if err := h.b.deliverReply(context.Background(), Scope{ChatID: aliceChat}, "[[telegram-file:"+stale+"]]", time.Now().Add(time.Minute)); err != nil {
+		t.Errorf("stale file delivery = %v", err)
 	}
-	if len(h.tg.Sent()) != 0 {
-		t.Fatal("a rejected file was sent")
+	for _, sent := range h.tg.Sent() {
+		if sent.Document != "" || !strings.Contains(sent.Text, "could not attach 1 generated file") {
+			t.Fatalf("invalid attachment was sent or not explained: %+v", sent)
+		}
+	}
+	if !strings.Contains(h.tg.AllText(), "Answer preserved.") {
+		t.Fatal("the answer text was hidden by an invalid attachment")
+	}
+}
+
+func TestTurnWithInvalidGeneratedFileStillDeliversAnswer(t *testing.T) {
+	ws := testkit.Workspace(t)
+	reply := "The report is ready.\n[[telegram-file:" + filepath.Join(ws, "missing.txt") + "]]"
+	h := newHarness(t, harnessOpts{ws: ws, spec: successSpec(reply, reply)})
+	got := h.text(msg(1, aliceChat, aliceID, "make a report"))
+	if !strings.Contains(got, "The report is ready.") || !strings.Contains(got, "could not attach 1 generated file") {
+		t.Fatalf("missing generated file hid the answer: %q", got)
+	}
+	sessions := h.sessions(t, aliceID, false)
+	if len(sessions) != 1 || !h.lastTurn(t, sessions[0].ID).Delivered {
+		t.Fatal("reply with invalid file was left pending for endless retries")
 	}
 }

@@ -36,6 +36,7 @@ type inflightTurn struct {
 	sessionID string
 	turnID    int64
 	started   time.Time
+	running   bool
 }
 
 func (t *inflightTurn) setSession(id string) {
@@ -54,6 +55,18 @@ func (t *inflightTurn) ids() (string, int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sessionID, t.turnID
+}
+
+func (t *inflightTurn) setRunning() {
+	t.mu.Lock()
+	t.running = true
+	t.mu.Unlock()
+}
+
+func (t *inflightTurn) state() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sessionID, t.running
 }
 
 // inflightRegistry maps a scope to its current turn.

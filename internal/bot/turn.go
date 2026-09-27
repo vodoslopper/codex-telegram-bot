@@ -167,6 +167,9 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 	entry.setTurn(turnID)
 
 	// --- workspace lock -----------------------------------------------------
+	if b.wsLocks.Held(workspaceKey(sess.Workspace)) {
+		b.sendBest(turnCtx, p.Scope, "⏳ Queued for the workspace. Another turn is using it; /stop cancels this chat's active turn.")
+	}
 	releaseWS, err := b.wsLocks.Acquire(waitCtx, workspaceKey(sess.Workspace))
 	if err != nil {
 		// Detached, so the busy turn is still recorded when the wait ended
@@ -278,6 +281,7 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 		"prompt_chars", len([]rune(p.Text)), "sandbox", b.cx.Sandbox(), "model", req.Model)
 
 	startedAt := time.Now().Add(-2 * time.Second)
+	entry.setRunning()
 	res, runErr := b.cx.Run(turnCtx, req)
 	finished.Store(true)
 	if ackTimer != nil {
@@ -378,7 +382,7 @@ func (b *Bot) finish(ctx context.Context, p *Prepared, sess store.Session, turnI
 		b.log.Error("could not deliver a turn result",
 			"turn_id", turnID, "status", out.status, "error", err.Error())
 		if out.status == store.TurnCompleted {
-			b.sendBest(ctx, p.Scope, "I could not deliver the generated file or the full reply. The file remains in the workspace; please retry or check the bot log.")
+			b.sendBest(ctx, p.Scope, "Telegram did not confirm delivery of the generated file or full reply. I will retry automatically; check the bot log if it continues to fail.")
 		}
 		return
 	}

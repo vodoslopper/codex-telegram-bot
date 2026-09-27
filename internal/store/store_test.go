@@ -261,8 +261,18 @@ func TestRenameAndArchive(t *testing.T) {
 	}
 
 	// Archived sessions disappear from the default listing but not from `all`.
+	for _, topic := range []int64{0, 17} {
+		if err := s.SelectSession(ctx(), 7, topic, 7, sess.ID); err != nil {
+			t.Fatalf("SelectSession(topic %d): %v", topic, err)
+		}
+	}
 	if err := s.SetArchived(ctx(), sess.ID, 7, true); err != nil {
 		t.Fatalf("SetArchived: %v", err)
+	}
+	for _, topic := range []int64{0, 17} {
+		if _, err := s.GetSelection(ctx(), 7, topic, 7); !errors.Is(err, ErrNotFound) {
+			t.Errorf("archive left selection in topic %d: %v", topic, err)
+		}
 	}
 	if list, _ := s.ListSessions(ctx(), 7, false); len(list) != 0 {
 		t.Errorf("an archived session is still listed by default: %+v", list)
