@@ -49,7 +49,7 @@ Telegram ──getUpdates──> bot ──exec.CommandContext──> codex exec
 ## Quick start
 
 ```sh
-git clone <this repository> codex-telegram-bot
+git clone https://github.com/vodoslopper/codex-telegram-bot.git
 cd codex-telegram-bot
 
 go build ./...            # compiles
@@ -59,8 +59,9 @@ go vet ./...
 go build -o "$HOME/.local/bin/codex-telegram-bot" ./cmd/bot
 ```
 
-Run it in the foreground with the environment inline (note the leading space, so
-the token does not land in your shell history):
+After completing [Host setup](#host-setup), run it in the foreground with the
+environment inline (note the leading space, so the token does not land in your
+shell history):
 
 ```sh
  TELEGRAM_BOT_TOKEN='123456:real-token' \
@@ -96,9 +97,18 @@ only ever reads private chats.
 
 ### 2. Find your numeric user id
 
-The allowlist takes numbers, not usernames. Before the bot is running, the
-simplest local method is a one-time `getUpdates` against your own token — send
-yourself a message to the bot first, then:
+The allowlist takes numbers, not usernames. First create the environment file
+and put the BotFather token in `TELEGRAM_BOT_TOKEN`:
+
+```sh
+install -d -m 700 "$HOME/.config/codex-telegram-bot"
+cp .env.example "$HOME/.config/codex-telegram-bot/bot.env"
+chmod 600 "$HOME/.config/codex-telegram-bot/bot.env"
+$EDITOR "$HOME/.config/codex-telegram-bot/bot.env"
+```
+
+Before the bot is running, the simplest local method is a one-time `getUpdates`
+against your own token. Send yourself a message to the bot first, then:
 
 ```sh
 # Reads the token from the env file, never from argv, so it stays out of `ps`
@@ -179,9 +189,10 @@ documentation](https://learn.chatgpt.com/docs/auth) for a supported alternative.
 
 ### 7. Configure
 
+Open the environment file you created in step 2 and replace the sample user id
+with your numeric id. Fill in the four absolute paths as well:
+
 ```sh
-cp .env.example "$HOME/.config/codex-telegram-bot/bot.env"
-chmod 600 "$HOME/.config/codex-telegram-bot/bot.env"
 $EDITOR "$HOME/.config/codex-telegram-bot/bot.env"
 ```
 
@@ -305,7 +316,7 @@ answering them would confirm the bot exists to strangers.
 | `/model luna` or `/model sol` | Save a model override for this chat or topic. `/model reset` restores inheritance. |
 | `/model default luna` or `/model default sol` | Save your default model for chats and topics without an override. `/model default reset` restores `BOT_CODEX_MODEL`. |
 | `/rename <id> <name>` | Relabel a session. |
-| `/archive <id>` | Hide a session from `/sessions`. Codex history is untouched; `/unarchive <id>` brings it back. |
+| `/archive <id>` | Hide and deselect a session in every chat and topic. Codex history is untouched; `/unarchive <id>` brings it back. |
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |
 
@@ -325,9 +336,10 @@ turns in the same session are given the retained file path, so Codex can inspect
 it again without a separate model call. Codex judges whether each completed
 follow-up turn relates to the file; the bot removes it after the third unrelated
 turn. Related turns do not count, and turns in other sessions do not count.
-Archiving a session removes all its retained files. A new attachment sent to a
-still-selected archived session is removed after that turn. These counts and
-paths survive a bot restart. Telegram's public Bot API limits downloads to 20 MB;
+Archiving a session removes all its retained files and clears its selections.
+You can explicitly select an archived session again with `/use`; an attachment
+sent to it is removed after that turn. These counts and paths survive a bot
+restart. Telegram's public Bot API limits downloads to 20 MB;
 larger files get an error before Codex runs. Codex needs suitable tools in the
 workspace to inspect or transcribe audio and video files.
 
@@ -339,7 +351,8 @@ five nonempty files of at most 50 MB each can be sent per turn. Files must be in
 the configured workspace and created or modified during that turn; links out of
 the workspace and files under `.git` are rejected. Files remain in the workspace
 after delivery. If an upload fails, the bot retries the stored answer while the
-file remains available.
+file remains available. Invalid file references are skipped with a note in the
+text answer; they are not retried indefinitely.
 
 The model choice is read when each turn starts. It also applies when an existing
 Codex session resumes. Choices are stored per allowed user; topics have separate
