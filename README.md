@@ -300,6 +300,7 @@ answering them would confirm the bot exists to strangers.
 | `/sessions [all]` | List **your** sessions; `all` includes archived ones. `*` marks the selected one. |
 | `/use <id>` | Switch this chat (and topic) to one of your sessions. |
 | `/session` | The selected session, workspace, Codex thread, and running/idle status. `/status` and `/current` are aliases. |
+| `/usage` | Last reported context use for the selected session, plus live account rate limits when available. |
 | `/model` | Show the effective GPT-6 model in this chat or topic. |
 | `/model luna` or `/model sol` | Save a model override for this chat or topic. `/model reset` restores inheritance. |
 | `/model default luna` or `/model default sol` | Save your default model for chats and topics without an override. `/model default reset` restores `BOT_CODEX_MODEL`. |
@@ -307,6 +308,13 @@ answering them would confirm the bot exists to strangers.
 | `/archive <id>` | Hide a session from `/sessions`. Codex history is untouched; `/unarchive <id>` brings it back. |
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |
+
+`/usage` does not start a Codex turn. Its context figure comes from the selected
+thread's latest saved Codex token report. The bot asks Codex's local app-server
+for current 5-hour and weekly limits; if that experimental interface is
+unavailable, it shows the saved limits from the same thread and labels their
+timestamp. Reset times are shown in UTC. Without a completed turn in the
+selected session, context use is unavailable.
 
 Photos, documents, audio (including voice notes), and video (including video
 notes) can also start a turn. A caption is used as the prompt; without one, the

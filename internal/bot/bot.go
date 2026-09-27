@@ -85,6 +85,8 @@ type Store interface {
 // Codex runs one turn. *codexcli.Runner satisfies it.
 type Codex interface {
 	Run(ctx context.Context, req codexcli.Request) (*codexcli.Result, error)
+	SessionUsage(ctx context.Context, threadID string) (codexcli.UsageSnapshot, error)
+	LiveRateLimits(ctx context.Context) (*codexcli.RateLimits, error)
 	// ElidedArgv returns the exact argument list a request would produce, with
 	// the prompt replaced by a placeholder. It is recorded with the turn so a
 	// failed one can be debugged without persisting the user's text.

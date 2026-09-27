@@ -47,6 +47,8 @@ func (b *Bot) handleCommand(ctx context.Context, p *Prepared) {
 		err = b.cmdSession(ctx, p)
 	case "model":
 		err = b.cmdModel(ctx, p, cmd)
+	case "usage":
+		err = b.cmdUsage(ctx, p)
 	case "rename":
 		err = b.cmdRename(ctx, p, cmd)
 	case "archive":
@@ -101,6 +103,7 @@ func (b *Bot) helpText(ctx context.Context, scope Scope, greeting bool) string {
 /sessions [all]     list your sessions (all includes archived)
 /use <id>           switch to one of your sessions
 /session            show the selected session, workspace and status
+/usage              show context capacity and account rate limits
 /model              show the model used in this chat or topic
 /model luna|sol     select a model here; /model reset inherits your default
 /model default luna|sol  set your default for other chats and topics
