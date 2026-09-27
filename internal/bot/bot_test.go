@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -668,6 +669,214 @@ func TestUndeliveredReplyIsResentNotRecomputed(t *testing.T) {
 	h.say(update)
 	if n := len(h.tg.Sent()); n != 0 {
 		t.Errorf("a third delivery produced %d message(s)", n)
+	}
+}
+
+func TestSavedReplyIsRetriedAfterOffsetAdvances(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("saved answer", "saved answer")})
+	h.say(testkit.TopicUpdate(1, aliceChat, 17, aliceID, "/new saved"))
+	h.tg.Reset()
+	h.tg.SetSendError(errors.New("temporary Telegram failure"))
+	update := testkit.TopicUpdate(2, aliceChat, 17, aliceID, "do the thing")
+	h.say(update)
+	if len(h.tg.Sent()) != 0 {
+		t.Fatal("Telegram accepted a reply during the simulated failure")
+	}
+	id := selected(t, h, aliceChat, 17, aliceID)
+	if turn := h.lastTurn(t, id); turn.Status != store.TurnCompleted || turn.Delivered {
+		t.Fatalf("failed delivery was not saved for retry: %+v", turn)
+	}
+	if err := h.st.AdvanceOffset(context.Background(), 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(context.Background(),
+		`UPDATE turns SET finished_at = ? WHERE update_id = ?`,
+		time.Now().Add(-3*time.Minute).UTC().Format(time.RFC3339Nano), 2); err != nil {
+		t.Fatal(err)
+	}
+	h.tg.SetSendError(nil)
+	h.b.retryPendingReplies(context.Background())
+	sent := h.tg.Sent()
+	if len(sent) != 1 || sent[0].Text != "saved answer" || sent[0].ThreadID != 17 {
+		t.Fatalf("retried reply = %+v", sent)
+	}
+	if n := len(h.fake.Invocations(t)); n != 1 {
+		t.Fatalf("Codex ran %d times; retry must only send the saved answer", n)
+	}
+	h.b.retryPendingReplies(context.Background())
+	if len(h.tg.Sent()) != 1 {
+		t.Fatal("a confirmed answer was retried again")
+	}
+}
+
+func TestLegacySavedReplyFallsBackToRecordedPrivateChat(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("old answer", "old answer")})
+	h.say(testkit.TopicUpdate(1, aliceChat, 17, aliceID, "/new old"))
+	id := selected(t, h, aliceChat, 17, aliceID)
+	h.tg.Reset()
+	h.tg.SetSendError(errors.New("temporary Telegram failure"))
+	h.say(testkit.TopicUpdate(2, aliceChat, 17, aliceID, "old prompt"))
+	h.tg.SetSendError(nil)
+	if _, err := h.st.DB().ExecContext(context.Background(),
+		`UPDATE processed_updates SET thread_id = NULL WHERE update_id = 2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.ClearSelection(context.Background(), aliceChat, 17, aliceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.DB().ExecContext(context.Background(),
+		`UPDATE turns SET finished_at = ? WHERE update_id = 2`,
+		time.Now().Add(-3*time.Minute).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	h.b.retryPendingReplies(context.Background())
+	sent := h.tg.Sent()
+	if len(sent) != 1 || sent[0].ChatID != aliceChat || sent[0].ThreadID != 0 ||
+		!strings.Contains(sent[0].Text, "original topic unavailable") ||
+		!strings.Contains(sent[0].Text, id) || !strings.Contains(sent[0].Text, "old answer") {
+		t.Fatalf("legacy recovery message = %+v", sent)
+	}
+	if turn := h.lastTurn(t, id); !turn.Delivered {
+		t.Fatalf("legacy recovery was not marked delivered: %+v", turn)
+	}
+	if n := len(h.fake.Invocations(t)); n != 1 {
+		t.Fatalf("legacy recovery reran Codex %d times", n)
+	}
+}
+
+func TestPollDispatchOrdersSessionSwitchAfterTurn(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: slowSpec()})
+	oldID := newSession(t, h, 1, aliceChat, aliceID, "old")
+	for _, update := range []telegram.Update{
+		msg(2, aliceChat, aliceID, "slow prompt"),
+		msg(3, aliceChat, aliceID, "/new next"),
+	} {
+		p, err := h.b.Claim(context.Background(), update)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.b.dispatch(context.Background(), p)
+	}
+	h.fake.WaitForEmitted(t, 1, 15*time.Second)
+	if got := selected(t, h, aliceChat, 0, aliceID); got != oldID {
+		t.Fatalf("/new overtook the earlier prompt: selected %s, want %s", got, oldID)
+	}
+	stop, err := h.b.Claim(context.Background(), msg(4, aliceChat, aliceID, "/stop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), stop)
+	h.b.Wait()
+	if got := selected(t, h, aliceChat, 0, aliceID); got == oldID {
+		t.Fatal("/new never ran after the active turn finished")
+	}
+	if turn := h.lastTurn(t, oldID); turn.Status != store.TurnCancelled {
+		t.Fatalf("earlier prompt ran in the wrong session or was not cancelled: %+v", turn)
+	}
+}
+
+func TestStopTargetsActiveTurnBeforeQueuedTurn(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: slowSpec(), env: map[string]string{"BOT_QUEUE_TIMEOUT": "30s"}})
+	id := newSession(t, h, 1, aliceChat, aliceID, "stop queue")
+	for _, update := range []telegram.Update{
+		msg(2, aliceChat, aliceID, "first slow prompt"),
+		msg(3, aliceChat, aliceID, "second slow prompt"),
+	} {
+		p, err := h.b.Claim(context.Background(), update)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.b.dispatch(context.Background(), p)
+	}
+	h.fake.WaitForEmitted(t, 1, 15*time.Second)
+	for _, updateID := range []int64{4, 5} {
+		if updateID == 5 {
+			h.fake.WaitForEmitted(t, 2, 15*time.Second)
+		}
+		p, err := h.b.Claim(context.Background(), msg(updateID, aliceChat, aliceID, "/stop"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.b.dispatch(context.Background(), p)
+	}
+	h.b.Wait()
+	rows, err := h.st.DB().QueryContext(context.Background(),
+		`SELECT status FROM turns WHERE session_id = ? ORDER BY update_id`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var statuses []string
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		statuses = append(statuses, status)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 2 || statuses[0] != store.TurnCancelled || statuses[1] != store.TurnCancelled {
+		t.Fatalf("turn statuses after consecutive /stop commands: %v", statuses)
+	}
+}
+
+func TestDispatchQueueTimeoutIncludesScopeWait(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: slowSpec(), env: map[string]string{"BOT_QUEUE_TIMEOUT": "150ms"}})
+	newSession(t, h, 1, aliceChat, aliceID, "queue timeout")
+	first, err := h.b.Claim(context.Background(), msg(2, aliceChat, aliceID, "first prompt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), first)
+	h.fake.WaitForEmitted(t, 1, 15*time.Second)
+	second, err := h.b.Claim(context.Background(), msg(3, aliceChat, aliceID, "second prompt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), second)
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(h.tg.AllText(), "wait limit (150ms) expired") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(h.tg.AllText(), "wait limit (150ms) expired") {
+		t.Fatal("queued prompt did not report its scope wait timeout")
+	}
+	stop, err := h.b.Claim(context.Background(), msg(4, aliceChat, aliceID, "/stop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), stop)
+	h.b.Wait()
+	if n := len(h.fake.Invocations(t)); n != 1 {
+		t.Fatalf("Codex ran %d turns; timed-out prompt must not run", n)
+	}
+}
+
+func TestConcurrentTurnAdmissionRespectsLimit(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.cfg.MaxConcurrent = 2
+	const callers = 32
+	var wg sync.WaitGroup
+	results := make(chan bool, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- h.b.reserveTurn()
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var admitted int
+	for ok := range results {
+		if ok {
+			admitted++
+		}
+	}
+	if admitted != h.cfg.MaxConcurrent {
+		t.Fatalf("admitted %d turns with limit %d", admitted, h.cfg.MaxConcurrent)
 	}
 }
 

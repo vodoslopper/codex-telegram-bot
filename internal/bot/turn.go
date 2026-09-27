@@ -23,18 +23,33 @@ import (
 // without blocking and an over-limit message gets a clear refusal instead of a
 // place in an unbounded queue.
 func (b *Bot) handleText(ctx context.Context, p *Prepared) {
-	limit := int64(b.cfg.MaxConcurrent)
-	if limit > 0 && b.pendingTurns.Load() >= limit {
+	if p.busy || (!p.admitted && !b.reserveTurn()) {
 		b.log.Warn("refusing a turn: too many are already queued or running",
-			"pending", b.pendingTurns.Load(), "limit", limit, "user_id", p.Scope.UserID)
+			"pending", b.pendingTurns.Load(), "limit", b.cfg.MaxConcurrent, "user_id", p.Scope.UserID)
 		b.sendBest(ctx, p.Scope, fmt.Sprintf(
 			"I already have %d turn(s) queued or running, which is my limit. "+
-				"Wait for them to finish, or send /stop to cancel the one in this chat.", limit))
+				"Wait for them to finish, or send /stop to cancel the one in this chat.", b.cfg.MaxConcurrent))
 		return
 	}
-	b.pendingTurns.Add(1)
-	defer b.pendingTurns.Add(-1)
+	if !p.admitted {
+		defer b.pendingTurns.Add(-1)
+	}
 	b.runTurn(ctx, p)
+}
+
+// reserveTurn makes the configured cap an atomic admission decision. The poller
+// calls it before dispatch, so turns waiting for their scope are counted too.
+func (b *Bot) reserveTurn() bool {
+	limit := int64(b.cfg.MaxConcurrent)
+	for {
+		current := b.pendingTurns.Load()
+		if limit > 0 && current >= limit {
+			return false
+		}
+		if b.pendingTurns.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
 }
 
 // turnOutcome is what one Codex run produced, in the form the database and the
@@ -67,12 +82,15 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 
 	// A cancellable context for the whole turn, registered before any waiting so
 	// /stop can reach a turn that is still queued for a lock.
-	turnCtx, cancelTurn := context.WithCancel(ctx)
-	defer cancelTurn()
-
-	entry := &inflightTurn{cancel: cancelTurn, started: b.now()}
-	b.inflight.register(p.Scope, entry)
-	defer b.inflight.clear(p.Scope, entry)
+	turnCtx, entry := p.turnCtx, p.entry
+	if turnCtx == nil {
+		var cancelTurn context.CancelFunc
+		turnCtx, cancelTurn = context.WithCancel(ctx)
+		defer cancelTurn()
+		entry = &inflightTurn{cancel: cancelTurn, started: b.now()}
+		b.inflight.register(p.Scope, entry)
+		defer b.inflight.clear(p.Scope, entry)
+	}
 
 	// The typing indicator covers queueing as well as the turn itself, so a long
 	// wait does not look like a dead bot.
@@ -100,7 +118,7 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 			"I could not set up a Codex session for this message: "+firstLine(err.Error()))
 		return
 	}
-	entry.sessionID = sess.ID
+	entry.setSession(sess.ID)
 	if notice != "" {
 		b.sendBest(turnCtx, p.Scope, notice)
 	}
@@ -146,7 +164,7 @@ func (b *Bot) runTurn(ctx context.Context, p *Prepared) {
 			"Check the bot log.")
 		return
 	}
-	entry.turnID = turnID
+	entry.setTurn(turnID)
 
 	// --- workspace lock -----------------------------------------------------
 	releaseWS, err := b.wsLocks.Acquire(waitCtx, workspaceKey(sess.Workspace))

@@ -338,8 +338,8 @@ those lines. Documents preserve exact bytes, including PNG transparency. Up to
 five nonempty files of at most 50 MB each can be sent per turn. Files must be in
 the configured workspace and created or modified during that turn; links out of
 the workspace and files under `.git` are rejected. Files remain in the workspace
-after delivery. If an upload fails, redelivery can retry from the stored answer
-while the file remains available.
+after delivery. If an upload fails, the bot retries the stored answer while the
+file remains available.
 
 The model choice is read when each turn starts. It also applies when an existing
 Codex session resumes. Choices are stored per allowed user; topics have separate
@@ -530,11 +530,17 @@ was lost. What the bot does:
 - The update was already claimed, so **the prompt is never re-issued**. The bot
   prefers to lose a reply over running the same file-editing task twice.
 - If the turn *had* completed and only its delivery was unconfirmed
-  (`turns.delivered = 0`), the stored reply is resent on redelivery — from the
-  database, without touching Codex.
+  (`turns.delivered = 0`), the bot retries the stored reply in the original chat
+  and topic without touching Codex. It checks on startup and every 30 seconds,
+  after the original delivery deadline has passed. For updates claimed before
+  the topic-id migration, it uses a uniquely identifiable earlier session
+  selection when available. Otherwise it sends a labeled recovery message to
+  the recorded private chat, without guessing a topic. No manual database work
+  is needed during migration.
 
-That is the honest limit: at-most-once execution, at-most-once *delivery* only
-when the outcome was written down in time.
+That is the honest limit: execution is at most once. A Telegram response can
+arrive after the bot loses the delivery acknowledgement, so retrying an
+unconfirmed reply can occasionally duplicate its text or files.
 
 ### Concurrency
 
@@ -806,9 +812,9 @@ token, no real Codex account, and no Codex turn ever run:
   the thread UUID stored → second prompt → `resume <that exact UUID>` argv
   recorded → restart on the same directories → selection and thread intact →
   `/use` back to the first session.
-- Duplicate updates: one Codex invocation, one turn row; and an
-  already-computed-but-undelivered reply is resent **from the database** rather
-  than recomputed.
+- Duplicate updates: one Codex invocation and one turn row. Completed replies
+  left undelivered after the update offset advances are retried **from the
+  database** in their original chat or topic, without recomputing them.
 - Command parsing, including `@mention` addressing and multi-word rename targets.
 - Telegram message splitting: never over 4096 UTF-16 units, never a split
   surrogate pair, nothing lost, paragraph and line breaks preferred.

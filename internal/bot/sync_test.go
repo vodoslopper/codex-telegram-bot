@@ -195,10 +195,12 @@ func TestInflightRegistry(t *testing.T) {
 		t.Error("a different topic saw this scope's turn")
 	}
 
-	// Clearing with a stale pointer must not remove a newer turn — that is what
-	// stops a late /stop from clobbering the turn that replaced it.
+	// A queued turn must not replace the active one as /stop's target.
 	newer := &inflightTurn{cancel: func() {}, sessionID: "s2"}
 	r.register(scope, newer)
+	if got := r.get(scope); got != entry {
+		t.Errorf("queued turn replaced active /stop target: %+v", got)
+	}
 	r.clear(scope, entry)
 	if got := r.get(scope); got != newer {
 		t.Errorf("a stale clear removed the current turn: %+v", got)

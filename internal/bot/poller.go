@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"codex-telegram-bot/internal/telegram"
@@ -152,15 +153,82 @@ func (b *Bot) Poll(ctx context.Context) error {
 // service down: one malformed message must not stop the bot for everybody.
 func (b *Bot) dispatch(_ context.Context, p *Prepared) {
 	ctx := b.workContext()
+	turn := !p.Duplicate && !p.Unsupported && p.Cmd == nil
+	if turn {
+		p.admitted = b.reserveTurn()
+		p.busy = !p.admitted
+		if p.admitted {
+			p.turnCtx, p.cancel = context.WithCancel(ctx)
+			p.entry = &inflightTurn{cancel: p.cancel, started: b.now()}
+			b.inflight.register(p.Scope, p.entry)
+		}
+	}
+	stop := p.Cmd != nil && (p.Cmd.Name == "stop" || p.Cmd.Name == "cancel")
+	var previous <-chan struct{}
+	var done chan struct{}
+	if !stop && !p.busy {
+		b.dispatchMu.Lock()
+		previous = b.dispatchTail[p.Scope]
+		done = make(chan struct{})
+		b.dispatchTail[p.Scope] = done
+		b.dispatchMu.Unlock()
+	}
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
+		var finishTurn func()
+		if p.admitted {
+			var once sync.Once
+			finishTurn = func() {
+				once.Do(func() {
+					b.inflight.clear(p.Scope, p.entry)
+					p.cancel()
+					b.pendingTurns.Add(-1)
+				})
+			}
+			defer finishTurn()
+		}
+		if done != nil {
+			defer func() {
+				b.dispatchMu.Lock()
+				close(done)
+				if b.dispatchTail[p.Scope] == done {
+					delete(b.dispatchTail, p.Scope)
+				}
+				b.dispatchMu.Unlock()
+			}()
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				b.log.Error("panic while handling an update",
 					"update_id", p.UpdateID, "panic", r, "stack", string(debug.Stack()))
 			}
 		}()
+		if previous != nil {
+			waitCtx := ctx
+			if p.turnCtx != nil {
+				waitCtx = p.turnCtx
+			}
+			queueCtx, cancelQueue := context.WithTimeout(waitCtx, b.cfg.QueueTimeout)
+			defer cancelQueue()
+			select {
+			case <-previous:
+			case <-queueCtx.Done():
+				if p.admitted {
+					b.reportQueueFailure(waitCtx, p, "another turn in this chat", queueCtx.Err())
+					finishTurn()
+				} else if ctx.Err() == nil {
+					b.sendBest(ctx, p.Scope, "This command waited too long for the current turn. Please retry it.")
+				}
+				// Keep the ordering link until the predecessor ends. Otherwise
+				// the following command could overtake the active turn.
+				select {
+				case <-previous:
+				case <-ctx.Done():
+				}
+				return
+			}
+		}
 		b.Handle(ctx, p)
 	}()
 }
@@ -215,7 +283,66 @@ func (b *Bot) Run(pollCtx, workCtx context.Context) error {
 	if err := b.Prepare(pollCtx); err != nil {
 		return err
 	}
+	retryCtx, cancelRetry := context.WithCancel(pollCtx)
+	defer cancelRetry()
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		b.retryLoop(retryCtx)
+	}()
 	return b.Poll(pollCtx)
+}
+
+func (b *Bot) retryLoop(ctx context.Context) {
+	b.retryPendingReplies(ctx)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.retryPendingReplies(ctx)
+		}
+	}
+}
+
+// retryPendingReplies handles completed turns whose offset has already moved
+// past the original update. Waiting beyond the normal post-turn deadline avoids
+// racing the original handler's delivery attempt.
+func (b *Bot) retryPendingReplies(ctx context.Context) {
+	pending, err := b.st.PendingReplies(ctx, b.pendingCursor, 20)
+	if err != nil {
+		b.log.Error("could not list undelivered replies", "error", err.Error())
+		return
+	}
+	cutoff := b.now().Add(-afterTurnTimeout - 10*time.Second)
+	for _, reply := range pending {
+		b.pendingCursor = reply.TurnID
+		if reply.FinishedAt.After(cutoff) {
+			continue
+		}
+		sendCtx, cancel := context.WithTimeout(ctx, afterTurnTimeout)
+		scope := Scope{ChatID: reply.ChatID, ThreadID: reply.ThreadID, UserID: reply.UserID}
+		body := reply.Reply
+		if reply.Legacy {
+			label := fmt.Sprintf("Recovered reply for session %s", reply.SessionID)
+			if !reply.TopicKnown {
+				label += " (original topic unavailable; sent to this private chat)"
+			}
+			body = label + ":\n\n" + body
+		}
+		err := b.deliverReply(sendCtx, scope, body, reply.StartedAt)
+		if err == nil {
+			err = b.st.MarkTurnDelivered(sendCtx, reply.TurnID)
+		}
+		cancel()
+		if err != nil {
+			b.log.Warn("could not retry an undelivered reply", "turn_id", reply.TurnID, "error", err.Error())
+		} else {
+			b.log.Info("delivered a saved reply", "turn_id", reply.TurnID, "update_id", reply.UpdateID)
+		}
+	}
 }
 
 // Start is Run with one context, for callers that do not need the split.

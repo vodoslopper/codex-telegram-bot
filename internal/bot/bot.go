@@ -52,7 +52,8 @@ type Telegram interface {
 
 // Store is the persistence this package needs. *store.Store satisfies it.
 type Store interface {
-	ClaimUpdate(ctx context.Context, updateID, userID, chatID int64, kind string) (bool, error)
+	ClaimUpdateInThread(ctx context.Context, updateID, userID, chatID, threadID int64, kind string) (bool, error)
+	PendingReplies(ctx context.Context, afterID int64, limit int) ([]store.PendingReply, error)
 	TurnByUpdate(ctx context.Context, updateID int64) (store.Turn, error)
 	BeginTurn(ctx context.Context, updateID int64, sessionID string, ownerUserID int64, promptChars int, argv []string) (int64, error)
 	UpdateTurnArgv(ctx context.Context, turnID, ownerUserID int64, argv []string) error
@@ -111,6 +112,11 @@ type Bot struct {
 	scopeLocks *keyedLocks
 	wsLocks    *keyedLocks
 	inflight   *inflightRegistry
+	// dispatchTail serialises non-stop updates in Telegram arrival order for
+	// each scope. /stop bypasses it so it can interrupt a running turn.
+	dispatchMu    sync.Mutex
+	dispatchTail  map[Scope]chan struct{}
+	pendingCursor int64 // used only by the reply retry goroutine
 
 	// pendingTurns counts turns that are queued or running. It bounds how much
 	// work the bot takes on, and it is checked without blocking so the poller
@@ -132,15 +138,16 @@ func New(cfg *config.Config, tg Telegram, st Store, cx Codex, log *slog.Logger) 
 		log = slog.Default()
 	}
 	return &Bot{
-		cfg:        cfg,
-		tg:         tg,
-		st:         st,
-		cx:         cx,
-		log:        log,
-		scopeLocks: newKeyedLocks(),
-		wsLocks:    newKeyedLocks(),
-		inflight:   newInflightRegistry(),
-		now:        func() time.Time { return time.Now().UTC() },
+		cfg:          cfg,
+		tg:           tg,
+		st:           st,
+		cx:           cx,
+		log:          log,
+		scopeLocks:   newKeyedLocks(),
+		wsLocks:      newKeyedLocks(),
+		inflight:     newInflightRegistry(),
+		dispatchTail: make(map[Scope]chan struct{}),
+		now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -203,6 +210,13 @@ type Prepared struct {
 	// run of this bot. Nothing is executed for it; an undelivered reply may
 	// still be resent.
 	Duplicate bool
+	// The poller reserves a turn and its cancellation handle before launching
+	// a handler, so a following /stop can always find it.
+	admitted bool
+	busy     bool
+	turnCtx  context.Context
+	cancel   context.CancelFunc
+	entry    *inflightTurn
 }
 
 // Claim applies the gates to one update and records it as processed.
@@ -220,23 +234,23 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 	if msg == nil {
 		// Claim it anyway so Telegram stops redelivering something this build
 		// will never handle.
-		_, _ = b.claim(ctx, u.UpdateID, 0, 0, u.Kind())
+		_, _ = b.claim(ctx, u.UpdateID, 0, 0, 0, u.Kind())
 		return nil, nil
 	}
 
 	if !msg.Chat.IsPrivate() {
 		b.log.Info("ignoring a message from a non-private chat",
 			"chat_type", msg.Chat.Type, "chat_id", msg.Chat.ID, "update_id", u.UpdateID)
-		_, _ = b.claim(ctx, u.UpdateID, senderID(msg), msg.Chat.ID, "dropped:not-private")
+		_, _ = b.claim(ctx, u.UpdateID, senderID(msg), msg.Chat.ID, msg.ThreadID(), "dropped:not-private")
 		return nil, nil
 	}
 	if msg.From == nil {
 		b.log.Warn("ignoring a private message with no sender", "update_id", u.UpdateID)
-		_, _ = b.claim(ctx, u.UpdateID, 0, msg.Chat.ID, "dropped:no-sender")
+		_, _ = b.claim(ctx, u.UpdateID, 0, msg.Chat.ID, msg.ThreadID(), "dropped:no-sender")
 		return nil, nil
 	}
 	if msg.From.IsBot {
-		_, _ = b.claim(ctx, u.UpdateID, msg.From.ID, msg.Chat.ID, "dropped:bot-sender")
+		_, _ = b.claim(ctx, u.UpdateID, msg.From.ID, msg.Chat.ID, msg.ThreadID(), "dropped:bot-sender")
 		return nil, nil
 	}
 	if !b.cfg.Allowed(msg.From.ID) {
@@ -245,7 +259,7 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 		// the username and never the text.
 		b.log.Warn("rejecting a message from a user who is not on the allowlist",
 			"user_id", msg.From.ID, "update_id", u.UpdateID)
-		_, _ = b.claim(ctx, u.UpdateID, msg.From.ID, msg.Chat.ID, "dropped:not-allowed")
+		_, _ = b.claim(ctx, u.UpdateID, msg.From.ID, msg.Chat.ID, msg.ThreadID(), "dropped:not-allowed")
 		return nil, nil
 	}
 
@@ -257,7 +271,7 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 	switch {
 	case p.Media != nil:
 		p.Text = msg.Caption
-		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, "media:"+p.Media.kind)
+		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, scope.ThreadID, "media:"+p.Media.kind)
 		if err != nil {
 			return nil, err
 		}
@@ -268,7 +282,7 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 		// update gets a reply, so a claim that was not recorded would be
 		// redelivered and answered twice. A dropped update does not have that
 		// problem, and refusing to advance past spam would stall the poller.
-		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, "unsupported")
+		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, scope.ThreadID, "unsupported")
 		if err != nil {
 			return nil, err
 		}
@@ -279,14 +293,14 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 		if p.Cmd != nil {
 			kind = "command:" + p.Cmd.Name
 		}
-		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, kind)
+		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, scope.ThreadID, kind)
 		if err != nil {
 			return nil, err
 		}
 		p.Duplicate = !claimed
 	default:
 		p.Text = text
-		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, "text")
+		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, scope.ThreadID, "text")
 		if err != nil {
 			return nil, err
 		}
@@ -297,8 +311,8 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 
 // claim writes the deduplication row. An error here is worth reporting because
 // the offset must not advance past an update we failed to record.
-func (b *Bot) claim(ctx context.Context, updateID, userID, chatID int64, kind string) (bool, error) {
-	claimed, err := b.st.ClaimUpdate(ctx, updateID, userID, chatID, kind)
+func (b *Bot) claim(ctx context.Context, updateID, userID, chatID, threadID int64, kind string) (bool, error) {
+	claimed, err := b.st.ClaimUpdateInThread(ctx, updateID, userID, chatID, threadID, kind)
 	if err != nil {
 		b.log.Error("could not record an update as processed", "update_id", updateID, "error", err.Error())
 		return false, err

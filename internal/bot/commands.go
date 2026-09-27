@@ -285,12 +285,13 @@ func sessionDetail(ctx context.Context, b *Bot, scope Scope, sess store.Session)
 // for the session from another scope, or one left over from a crash), and the
 // last recorded turn.
 func (b *Bot) statusText(ctx context.Context, scope Scope, sess store.Session) string {
-	if t := b.inflight.get(scope); t != nil && t.sessionID == sess.ID {
-		return fmt.Sprintf("running for %s here (started %s ago) — /stop to cancel",
-			t.sessionID, b.now().Sub(t.started).Round(time.Second))
-	}
 	if t := b.inflight.get(scope); t != nil {
-		return fmt.Sprintf("idle, but %s is running in this chat — /stop to cancel", t.sessionID)
+		sessionID, _ := t.ids()
+		if sessionID == sess.ID {
+			return fmt.Sprintf("running for %s here (started %s ago) — /stop to cancel",
+				sessionID, b.now().Sub(t.started).Round(time.Second))
+		}
+		return fmt.Sprintf("idle, but %s is running in this chat — /stop to cancel", sessionID)
 	}
 	if running, err := b.st.HasRunningTurn(ctx, sess.ID); err == nil && running {
 		return "running from another chat or topic of yours"
@@ -409,12 +410,13 @@ func (b *Bot) cmdStop(ctx context.Context, p *Prepared) {
 		b.sendBest(ctx, p.Scope, "Nothing is running in this chat.")
 		return
 	}
+	sessionID, turnID := t.ids()
 	b.log.Info("cancelling a turn on request",
 		"user_id", p.Scope.UserID, "chat_id", p.Scope.ChatID,
-		"thread_id", p.Scope.ThreadID, "session_id", t.sessionID, "turn_id", t.turnID)
+		"thread_id", p.Scope.ThreadID, "session_id", sessionID, "turn_id", turnID)
 	t.cancel()
 	b.sendBest(ctx, p.Scope, fmt.Sprintf(
-		"Cancelling the turn on %s. The session itself is kept and can be resumed.", t.sessionID))
+		"Cancelling the turn on %s. The session itself is kept and can be resumed.", sessionID))
 }
 
 // --- shared argument handling ---------------------------------------------

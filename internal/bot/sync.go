@@ -31,41 +31,66 @@ func (s Scope) String() string {
 
 // inflightTurn is a running or queued turn that /stop can cancel.
 type inflightTurn struct {
+	mu        sync.Mutex
 	cancel    context.CancelFunc
 	sessionID string
 	turnID    int64
 	started   time.Time
 }
 
+func (t *inflightTurn) setSession(id string) {
+	t.mu.Lock()
+	t.sessionID = id
+	t.mu.Unlock()
+}
+
+func (t *inflightTurn) setTurn(id int64) {
+	t.mu.Lock()
+	t.turnID = id
+	t.mu.Unlock()
+}
+
+func (t *inflightTurn) ids() (string, int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sessionID, t.turnID
+}
+
 // inflightRegistry maps a scope to its current turn.
 //
-// A scope has at most one entry: the per-scope lock guarantees it, and the
-// registry is what lets /stop — which deliberately does not take that lock, or
-// it could never interrupt anything — find the turn to cancel.
+// A scope can have one running turn and several queued turns. /stop targets the
+// oldest one; it cannot take the scope lock because the active turn holds it.
 type inflightRegistry struct {
 	mu sync.Mutex
-	m  map[Scope]*inflightTurn
+	m  map[Scope][]*inflightTurn
 }
 
 func newInflightRegistry() *inflightRegistry {
-	return &inflightRegistry{m: make(map[Scope]*inflightTurn)}
+	return &inflightRegistry{m: make(map[Scope][]*inflightTurn)}
 }
 
-// register adds a turn. It replaces any existing entry for the scope, which
-// cannot happen while the scope lock is held but is handled anyway.
+// register adds a turn in arrival order, including turns waiting for the lock.
 func (r *inflightRegistry) register(s Scope, t *inflightTurn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.m[s] = t
+	r.m[s] = append(r.m[s], t)
 }
 
-// clear removes the entry if it is still the one we registered. Comparing the
-// pointer stops a late /stop from clearing a newer turn.
+// clear removes exactly this turn without disturbing any other queued turn.
 func (r *inflightRegistry) clear(s Scope, t *inflightTurn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cur, ok := r.m[s]; ok && cur == t {
-		delete(r.m, s)
+	entries := r.m[s]
+	for i, entry := range entries {
+		if entry == t {
+			entries = append(entries[:i], entries[i+1:]...)
+			if len(entries) == 0 {
+				delete(r.m, s)
+			} else {
+				r.m[s] = entries
+			}
+			return
+		}
 	}
 }
 
@@ -73,7 +98,10 @@ func (r *inflightRegistry) clear(s Scope, t *inflightTurn) {
 func (r *inflightRegistry) get(s Scope) *inflightTurn {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.m[s]
+	if entries := r.m[s]; len(entries) > 0 {
+		return entries[0]
+	}
+	return nil
 }
 
 // --- keyed locks -----------------------------------------------------------

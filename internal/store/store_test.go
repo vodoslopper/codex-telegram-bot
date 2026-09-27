@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"codex-telegram-bot/migrations"
 )
 
 func openStore(t *testing.T) *Store {
@@ -62,6 +65,70 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 	}
 	if applied != len(Migrations()) {
 		t.Errorf("%d migrations recorded, want %d", applied, len(Migrations()))
+	}
+}
+
+func TestOpenUpgradesOldUndeliveredReplyAutomatically(t *testing.T) {
+	path := t.TempDir() + "/bot.db"
+	db, err := sql.Open(DriverName, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx(), `CREATE TABLE schema_migrations (
+		version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"001_init.sql", "002_model_settings.sql", "003_retained_media.sql"} {
+		body, err := migrations.FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx(), string(body)); err != nil {
+			t.Fatalf("apply old migration %s: %v", name, err)
+		}
+		if _, err := db.ExecContext(ctx(), `INSERT INTO schema_migrations (version, applied_at)
+			VALUES (?, ?)`, name, "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const selected = "2026-01-01T00:00:00Z"
+	const started = "2026-01-01T00:01:00Z"
+	if _, err := db.ExecContext(ctx(), `INSERT INTO sessions
+		(id, owner_user_id, name, workspace, created_at, updated_at)
+		VALUES ('s7k3qm', 111, 'old', '/ws', ?, ?)`, selected, selected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx(), `INSERT INTO selections
+		(chat_id, thread_id, user_id, session_id, updated_at)
+		VALUES (111, 17, 111, 's7k3qm', ?)`, selected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx(), `INSERT INTO processed_updates
+		(update_id, user_id, chat_id, kind, created_at)
+		VALUES (42, 111, 111, 'text', ?)`, started); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx(), `INSERT INTO turns
+		(update_id, session_id, owner_user_id, status, reply, delivered, started_at, finished_at)
+		VALUES (42, 's7k3qm', 111, 'completed', 'old answer', 0, ?, ?)`, started, started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("open old database: %v", err)
+	}
+	defer upgraded.Close()
+	pending, err := upgraded.PendingReplies(ctx(), 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || !pending[0].Legacy || !pending[0].TopicKnown ||
+		pending[0].ThreadID != 17 || pending[0].Reply != "old answer" {
+		t.Fatalf("old reply after automatic upgrade = %+v", pending)
 	}
 }
 
@@ -340,6 +407,52 @@ func TestClaimUpdateIsIdempotent(t *testing.T) {
 	}
 	if _, err := s.ClaimUpdate(ctx(), 0, 1, 1, "text"); err == nil {
 		t.Error("ClaimUpdate accepted update id 0")
+	}
+}
+
+func TestPendingRepliesKeepTopicAndInferLegacyScope(t *testing.T) {
+	s := openStore(t)
+	sess, err := s.CreateSession(ctx(), 111, "reply", "/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SelectSession(ctx(), 111, 19, 111, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, updateID := range []int64{1, 2} {
+		if _, err := s.ClaimUpdateInThread(ctx(), updateID, 111, 111, 19, "text"); err != nil {
+			t.Fatal(err)
+		}
+		turnID, err := s.BeginTurn(ctx(), updateID, sess.ID, 111, 4, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.FinishTurn(ctx(), turnID, TurnCompleted, "", "answer", "", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An existing database has no recorded topic on its old claims.
+	if _, err := s.DB().ExecContext(ctx(), `UPDATE processed_updates SET thread_id = NULL WHERE update_id = 2`); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.PendingReplies(ctx(), 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 || pending[0].UpdateID != 1 || pending[0].Legacy ||
+		pending[1].UpdateID != 2 || !pending[1].Legacy || !pending[1].TopicKnown ||
+		pending[1].ThreadID != 19 || pending[1].ChatID != 111 {
+		t.Fatalf("pending replies = %+v", pending)
+	}
+	if err := s.ClearSelection(ctx(), 111, 19, 111); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = s.PendingReplies(ctx(), 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 || pending[1].TopicKnown || pending[1].ThreadID != 0 {
+		t.Fatalf("legacy reply without selection must use the chat root: %+v", pending)
 	}
 }
 

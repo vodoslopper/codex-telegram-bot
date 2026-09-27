@@ -22,6 +22,14 @@ die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 cleanup() {
+	if [[ -n "${bot_pid:-}" ]]; then
+		kill "$bot_pid" 2>/dev/null || true
+		wait "$bot_pid" 2>/dev/null || true
+	fi
+	if [[ -n "${stub_pid:-}" ]]; then
+		kill "$stub_pid" 2>/dev/null || true
+		wait "$stub_pid" 2>/dev/null || true
+	fi
 	if [[ "${KEEP:-0}" == "1" ]]; then
 		echo "keeping $tmp"
 	else
@@ -83,7 +91,6 @@ port_file="$tmp/port"
 STUB_SENT_FILE="$sent" STUB_UPDATE_ID=1001 \
 	python3 scripts/stub-telegram-api.py 0 > "$port_file" &
 stub_pid=$!
-trap 'kill "$stub_pid" 2>/dev/null || true; cleanup' EXIT
 
 for _ in $(seq 1 50); do
 	[[ -s "$port_file" ]] && break
@@ -145,7 +152,7 @@ say "checking the Codex invocation"
 n="$(cat "$artifacts/count" 2>/dev/null || echo 0)"
 [[ "$n" == "1" ]] || die "codex was invoked $n time(s), want 1"
 tr '\0' '\n' < "$artifacts/argv.1"
-expected=$'exec\n--json\n--strict-config\n--sandbox\nworkspace-write\n--\nSummarize this repository'
+expected=$'exec\n--json\n--strict-config\n--sandbox\nworkspace-write\n-m\ngpt-6-sol\n--\nSummarize this repository\n\nIf you create a file that the user should receive in Telegram, include a separate line in your final answer for each file in this exact form: [[telegram-file:/absolute/path/to/file]]. Create the file inside the current workspace. Do not claim a file is attached unless you include this line.'
 got="$(tr '\0' '\n' < "$artifacts/argv.1")"
 [[ "$got" == "$expected" ]] || die "unexpected argv:\n$got"
 cwd="$(cat "$artifacts/cwd.1")"

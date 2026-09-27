@@ -67,13 +67,19 @@ type Turn struct {
 // advancing the offset. The insert is committed by the caller's context before
 // Codex is started; that ordering is the whole deduplication guarantee.
 func (s *Store) ClaimUpdate(ctx context.Context, updateID, userID, chatID int64, kind string) (bool, error) {
+	return s.ClaimUpdateInThread(ctx, updateID, userID, chatID, 0, kind)
+}
+
+// ClaimUpdateInThread also records the exact topic needed to retry a reply
+// after the update offset has advanced.
+func (s *Store) ClaimUpdateInThread(ctx context.Context, updateID, userID, chatID, threadID int64, kind string) (bool, error) {
 	if updateID <= 0 {
 		return false, fmt.Errorf("store: invalid update id %d", updateID)
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO processed_updates (update_id, user_id, chat_id, kind, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		updateID, userID, chatID, kind, s.timestamp())
+		`INSERT OR IGNORE INTO processed_updates (update_id, user_id, chat_id, thread_id, kind, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		updateID, userID, chatID, threadID, kind, s.timestamp())
 	if err != nil {
 		return false, fmt.Errorf("store: claim update %d: %w", updateID, err)
 	}
@@ -82,6 +88,114 @@ func (s *Store) ClaimUpdate(ctx context.Context, updateID, userID, chatID int64,
 		return false, fmt.Errorf("store: claim update %d: %w", updateID, err)
 	}
 	return n == 1, nil
+}
+
+// PendingReply is a completed answer that Telegram has not confirmed. Its
+// scope comes from the original update, so topic replies stay in that topic.
+type PendingReply struct {
+	TurnID     int64
+	UpdateID   int64
+	SessionID  string
+	ChatID     int64
+	ThreadID   int64
+	UserID     int64
+	Legacy     bool
+	TopicKnown bool
+	Reply      string
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+// PendingReplies returns a bounded batch for automatic delivery retry. For an
+// older claim without a topic id, a unique selection that predates the turn can
+// identify the original topic. Otherwise the caller uses the private chat root.
+func (s *Store) PendingReplies(ctx context.Context, afterID int64, limit int) ([]PendingReply, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id, t.update_id, t.session_id, p.chat_id, p.thread_id,
+		p.user_id, t.reply, t.started_at, t.finished_at
+		FROM turns t JOIN processed_updates p ON p.update_id = t.update_id
+		WHERE t.status = ? AND t.delivered = 0 AND t.reply IS NOT NULL
+		ORDER BY (t.id <= ?), t.id LIMIT ?`, TurnCompleted, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list pending replies: %w", err)
+	}
+	var out []PendingReply
+	for rows.Next() {
+		var p PendingReply
+		var threadID sql.NullInt64
+		var started, finished string
+		if err := rows.Scan(&p.TurnID, &p.UpdateID, &p.SessionID, &p.ChatID, &threadID,
+			&p.UserID, &p.Reply, &started, &finished); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: scan pending reply: %w", err)
+		}
+		p.Legacy = !threadID.Valid
+		p.TopicKnown = threadID.Valid
+		if threadID.Valid {
+			p.ThreadID = threadID.Int64
+		}
+		if p.StartedAt, err = parseTime(started); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: pending reply start time: %w", err)
+		}
+		if p.FinishedAt, err = parseTime(finished); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: pending reply finish time: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("store: read pending replies: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("store: close pending replies: %w", err)
+	}
+	for i := range out {
+		if !out[i].Legacy {
+			continue
+		}
+		threadID, known, err := s.inferLegacyTopic(ctx, out[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i].ThreadID, out[i].TopicKnown = threadID, known
+	}
+	return out, nil
+}
+
+func (s *Store) inferLegacyTopic(ctx context.Context, reply PendingReply) (int64, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT thread_id, updated_at FROM selections
+		WHERE chat_id = ? AND user_id = ? AND session_id = ?`,
+		reply.ChatID, reply.UserID, reply.SessionID)
+	if err != nil {
+		return 0, false, fmt.Errorf("store: find legacy reply topic: %w", err)
+	}
+	defer rows.Close()
+	var candidate int64
+	var matches int
+	for rows.Next() {
+		var threadID int64
+		var updated string
+		if err := rows.Scan(&threadID, &updated); err != nil {
+			return 0, false, fmt.Errorf("store: scan legacy topic: %w", err)
+		}
+		selectedAt, err := parseTime(updated)
+		if err != nil {
+			return 0, false, fmt.Errorf("store: parse legacy selection time: %w", err)
+		}
+		if selectedAt.After(reply.StartedAt) {
+			continue
+		}
+		candidate = threadID
+		matches++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, false, fmt.Errorf("store: read legacy topics: %w", err)
+	}
+	return candidate, matches == 1, nil
 }
 
 // UpdateClaimed reports whether an update id is already in the ledger, without
