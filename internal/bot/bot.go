@@ -42,6 +42,7 @@ import (
 type Telegram interface {
 	SendMessage(ctx context.Context, chatID, threadID int64, text string) (*telegram.SentMessage, error)
 	SendMessageWithKeyboard(ctx context.Context, chatID, threadID int64, text string, keyboard *telegram.InlineKeyboard) (*telegram.SentMessage, error)
+	EditMessageText(ctx context.Context, chatID, messageID int64, text string, keyboard *telegram.InlineKeyboard) error
 	AnswerCallbackQuery(ctx context.Context, id, text string) error
 	SetMyCommands(ctx context.Context, commands []telegram.BotCommand) error
 	SendDocument(ctx context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error)
@@ -205,6 +206,8 @@ type Prepared struct {
 	Cmd *Command
 	// CallbackID is set for a button press; it must be acknowledged promptly.
 	CallbackID string
+	// CallbackMessageID identifies the bot message whose button was pressed.
+	CallbackMessageID int64
 	// Text is the message text, for a plain (non-command) message.
 	Text string
 	// Media is one supported attachment accompanying the caption.
@@ -245,7 +248,7 @@ func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
 		}
 		scope := Scope{ChatID: cb.Message.Chat.ID, ThreadID: cb.Message.ThreadID(), UserID: cb.From.ID}
 		p := &Prepared{UpdateID: u.UpdateID, MessageID: cb.Message.MessageID, Scope: scope,
-			CallbackID: cb.ID}
+			CallbackID: cb.ID, CallbackMessageID: cb.Message.MessageID}
 		// Telegram represents old, inaccessible messages with date 0. Their
 		// topic may be missing, so acknowledge the button without acting in a
 		// potentially wrong scope.

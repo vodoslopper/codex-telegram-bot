@@ -9,6 +9,7 @@ import (
 
 	"codex-telegram-bot/internal/sessid"
 	"codex-telegram-bot/internal/store"
+	"codex-telegram-bot/internal/telegram"
 )
 
 // handleCommand dispatches a parsed command.
@@ -242,6 +243,33 @@ func (b *Bot) cmdUse(ctx context.Context, p *Prepared, cmd *Command) error {
 	}
 	if err := b.st.SelectSession(ctx, p.Scope.ChatID, p.Scope.ThreadID, p.Scope.UserID, id); err != nil {
 		return err
+	}
+	if p.CallbackID != "" && p.CallbackMessageID > 0 {
+		sessions, listErr := b.st.ListSessions(ctx, p.Scope.UserID, false)
+		if listErr == nil {
+			// Keep the chosen session visible even when it is archived or older
+			// than the eight entries normally shown in the button panel.
+			visible := false
+			for _, s := range sessions[:min(len(sessions), maxSessionButtons)] {
+				if s.ID == id {
+					visible = true
+					break
+				}
+			}
+			if !visible {
+				sessions = append([]store.Session{sess}, sessions...)
+			}
+			text := fmt.Sprintf("Selected %s — %s.\nTap another session or send /sessions to see the full list.",
+				id, orPlaceholder(sess.Name))
+			if err := b.tg.EditMessageText(ctx, p.Scope.ChatID, p.CallbackMessageID,
+				text, sessionsKeyboard(sessions, id)); err == nil || telegram.IsMessageNotModified(err) {
+				return nil
+			} else {
+				b.log.Warn("could not update the session button message", "error", err.Error())
+			}
+		} else {
+			b.log.Warn("could not refresh the session buttons", "error", listErr.Error())
+		}
 	}
 	b.sendBest(ctx, p.Scope, fmt.Sprintf("Selected %s.\n%s", id, sessionDetail(ctx, b, p.Scope, sess)))
 	return nil

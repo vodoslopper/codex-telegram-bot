@@ -306,7 +306,9 @@ answering them would confirm the bot exists to strangers.
 
 The bot registers its main commands with Telegram when it connects. Open the
 chat's command menu or type `/` to choose one. `/sessions` shows buttons for the
-eight most recent sessions; tap one to switch in that chat or topic. `/model`
+eight most recent sessions; tap one to switch in that chat or topic. The session
+button message normally updates to show the new selection, so repeated switches
+do not add confirmation messages to the chat. `/model`
 shows buttons for the current chat or topic and your default. Text commands
 still work for every option, including older sessions beyond the button list.
 Ordinary messages remain free-form Codex prompts. Button presses follow the

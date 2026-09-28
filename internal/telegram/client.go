@@ -343,6 +343,26 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID, threadID i
 	return &sent, nil
 }
 
+// EditMessageText replaces a bot message and its inline keyboard after a button press.
+func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, text string, keyboard *InlineKeyboard) error {
+	if text == "" || messageID <= 0 {
+		return errors.New("telegram: refusing to edit a message without text or id")
+	}
+	return c.call(ctx, "editMessageText", struct {
+		ChatID      int64           `json:"chat_id"`
+		MessageID   int64           `json:"message_id"`
+		Text        string          `json:"text"`
+		ReplyMarkup *InlineKeyboard `json:"reply_markup,omitempty"`
+	}{chatID, messageID, text, keyboard}, nil)
+}
+
+// IsMessageNotModified reports Telegram's harmless response to an unchanged edit.
+func IsMessageNotModified(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == http.StatusBadRequest &&
+		strings.Contains(strings.ToLower(apiErr.Description), "message is not modified")
+}
+
 func (c *Client) AnswerCallbackQuery(ctx context.Context, id, text string) error {
 	return c.call(ctx, "answerCallbackQuery", struct {
 		ID   string `json:"callback_query_id"`

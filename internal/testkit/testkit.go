@@ -448,12 +448,13 @@ func shQuote(s string) string {
 
 // Sent is one message the bot delivered.
 type Sent struct {
-	ChatID   int64
-	ThreadID int64
-	Text     string
-	Document string
-	Data     []byte
-	Keyboard *telegram.InlineKeyboard
+	MessageID int64
+	ChatID    int64
+	ThreadID  int64
+	Text      string
+	Document  string
+	Data      []byte
+	Keyboard  *telegram.InlineKeyboard
 }
 
 type CallbackAnswer struct {
@@ -478,6 +479,7 @@ type FakeTelegram struct {
 	sendErr    error
 	pollErr    error
 	commandErr error
+	editErr    error
 	pollWait   chan struct{}
 	commands   []telegram.BotCommand
 	answers    []CallbackAnswer
@@ -531,6 +533,12 @@ func (f *FakeTelegram) SetCommandError(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.commandErr = err
+}
+
+func (f *FakeTelegram) SetEditError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.editErr = err
 }
 
 // QueueUpdates appends updates to be returned by the next getUpdates calls.
@@ -612,8 +620,24 @@ func (f *FakeTelegram) SendMessageWithKeyboard(_ context.Context, chatID, thread
 		return nil, f.sendErr
 	}
 	f.nextID++
-	f.sent = append(f.sent, Sent{ChatID: chatID, ThreadID: threadID, Text: text, Keyboard: keyboard})
+	f.sent = append(f.sent, Sent{MessageID: f.nextID, ChatID: chatID, ThreadID: threadID, Text: text, Keyboard: keyboard})
 	return &telegram.SentMessage{MessageID: f.nextID}, nil
+}
+
+func (f *FakeTelegram) EditMessageText(_ context.Context, chatID, messageID int64, text string, keyboard *telegram.InlineKeyboard) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.editErr != nil {
+		return f.editErr
+	}
+	for i := range f.sent {
+		if f.sent[i].ChatID == chatID && f.sent[i].MessageID == messageID {
+			f.sent[i].Text = text
+			f.sent[i].Keyboard = keyboard
+			return nil
+		}
+	}
+	return fmt.Errorf("fake Telegram: message %d not found", messageID)
 }
 
 func (f *FakeTelegram) AnswerCallbackQuery(_ context.Context, id, text string) error {
@@ -644,7 +668,7 @@ func (f *FakeTelegram) SendDocument(_ context.Context, chatID, threadID int64, p
 		return nil, f.sendErr
 	}
 	f.nextID++
-	f.sent = append(f.sent, Sent{ChatID: chatID, ThreadID: threadID, Document: filepath.Base(path), Data: data})
+	f.sent = append(f.sent, Sent{MessageID: f.nextID, ChatID: chatID, ThreadID: threadID, Document: filepath.Base(path), Data: data})
 	return &telegram.SentMessage{MessageID: f.nextID}, nil
 }
 

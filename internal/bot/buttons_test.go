@@ -61,20 +61,51 @@ func TestSessionButtonsSwitchWithinTopicAndRejectOtherOwner(t *testing.T) {
 		panel.Keyboard.InlineKeyboard[0][0].CallbackData != "use:"+second {
 		t.Fatalf("session panel = %+v", panel)
 	}
-	h.text(buttonUpdate(4, aliceChat, 17, aliceID, "use:"+first))
+	button := buttonUpdate(4, aliceChat, 17, aliceID, "use:"+first)
+	button.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(button)
 	if got := selected(t, h, aliceChat, 17, aliceID); got != first {
 		t.Fatalf("button selected %s, want %s", got, first)
 	}
-	if answers := h.tg.CallbackAnswers(); len(answers) != 1 || answers[0].ID != "cb-4" {
+	updated := h.tg.Sent()
+	if len(updated) != len(sent) || !strings.Contains(updated[len(updated)-1].Text, "Selected "+first) ||
+		!strings.HasPrefix(updated[len(updated)-1].Keyboard.InlineKeyboard[1][0].Text, "✓ ") {
+		t.Fatalf("button did not update the original session panel: %+v", updated[len(updated)-1])
+	}
+	same := buttonUpdate(5, aliceChat, 17, aliceID, "use:"+first)
+	same.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(same)
+	if len(h.tg.Sent()) != len(sent) {
+		t.Fatal("repeated session button sent a confirmation")
+	}
+	if answers := h.tg.CallbackAnswers(); len(answers) != 2 || answers[0].ID != "cb-4" || answers[1].ID != "cb-5" {
 		t.Fatalf("button acknowledgements = %+v", answers)
 	}
 	// A callback payload can be forged; ownership is still checked by /use.
-	h.text(buttonUpdate(5, bobChat, 0, bobID, "use:"+first))
+	h.text(buttonUpdate(6, bobChat, 0, bobID, "use:"+first))
 	if _, err := h.st.GetSelection(context.Background(), bobChat, 0, bobID); err == nil {
 		t.Fatal("another owner selected Alice's session through a button")
 	}
 	if got := h.tg.LastText(); !strings.Contains(got, "could not find that session") {
 		t.Fatalf("foreign session button replied %q", got)
+	}
+}
+
+func TestSessionButtonFallsBackWhenOriginalMessageCannotBeEdited(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	first := sessionIDIn(h.text(msg(1, aliceChat, aliceID, "/new first")))
+	h.text(msg(2, aliceChat, aliceID, "/new second"))
+	h.text(msg(3, aliceChat, aliceID, "/sessions"))
+	panel := h.tg.Sent()[len(h.tg.Sent())-1]
+	h.tg.SetEditError(errors.New("message can't be edited"))
+	button := buttonUpdate(4, aliceChat, 0, aliceID, "use:"+first)
+	button.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(button)
+	if got := selected(t, h, aliceChat, 0, aliceID); got != first {
+		t.Fatalf("selected = %s, want %s", got, first)
+	}
+	if len(h.tg.Sent()) != 4 || !strings.Contains(h.tg.LastText(), "Selected "+first) {
+		t.Fatalf("no fallback confirmation: %+v", h.tg.Sent())
 	}
 }
 

@@ -172,12 +172,16 @@ func TestGetUpdatesParsesMessagesAndCallbacks(t *testing.T) {
 func TestInteractiveMessageAndCommandRegistration(t *testing.T) {
 	srv, calls := newServer(t,
 		func(w http.ResponseWriter, _ string) { ok(w, `{"message_id":77}`) },
+		func(w http.ResponseWriter, _ string) { ok(w, `{"message_id":77}`) },
 		func(w http.ResponseWriter, _ string) { ok(w, `true`) },
 		func(w http.ResponseWriter, _ string) { ok(w, `true`) },
 	)
 	c := newClient(t, srv)
 	keyboard := &InlineKeyboard{InlineKeyboard: [][]InlineButton{{{Text: "Use session", CallbackData: "use:s7k3qm"}}}}
 	if _, err := c.SendMessageWithKeyboard(context.Background(), 111, 42, "Choose", keyboard); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EditMessageText(context.Background(), 111, 77, "Selected", keyboard); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.AnswerCallbackQuery(context.Background(), "cb-1", "Done"); err != nil {
@@ -189,11 +193,16 @@ func TestInteractiveMessageAndCommandRegistration(t *testing.T) {
 	if !strings.HasSuffix((*calls)[0].Method, "/sendMessage") || !strings.Contains((*calls)[0].Body, `"callback_data":"use:s7k3qm"`) || !strings.Contains((*calls)[0].Body, `"message_thread_id":42`) {
 		t.Errorf("keyboard call = %+v", (*calls)[0])
 	}
-	if !strings.HasSuffix((*calls)[1].Method, "/answerCallbackQuery") || !strings.Contains((*calls)[1].Body, `"callback_query_id":"cb-1"`) {
-		t.Errorf("callback answer = %+v", (*calls)[1])
+	if !strings.HasSuffix((*calls)[1].Method, "/editMessageText") || !strings.Contains((*calls)[1].Body, `"message_id":77`) ||
+		!strings.Contains((*calls)[1].Body, `"text":"Selected"`) || !strings.Contains((*calls)[1].Body, `"callback_data":"use:s7k3qm"`) ||
+		strings.Contains((*calls)[1].Body, `"message_thread_id"`) {
+		t.Errorf("message edit = %+v", (*calls)[1])
 	}
-	if !strings.HasSuffix((*calls)[2].Method, "/setMyCommands") || !strings.Contains((*calls)[2].Body, `"command":"sessions"`) {
-		t.Errorf("command registration = %+v", (*calls)[2])
+	if !strings.HasSuffix((*calls)[2].Method, "/answerCallbackQuery") || !strings.Contains((*calls)[2].Body, `"callback_query_id":"cb-1"`) {
+		t.Errorf("callback answer = %+v", (*calls)[2])
+	}
+	if !strings.HasSuffix((*calls)[3].Method, "/setMyCommands") || !strings.Contains((*calls)[3].Body, `"command":"sessions"`) {
+		t.Errorf("command registration = %+v", (*calls)[3])
 	}
 }
 

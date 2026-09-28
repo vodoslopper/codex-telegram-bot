@@ -79,7 +79,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"ok": True, "result": []})
         elif method in ("setMyCommands", "answerCallbackQuery"):
             self._send({"ok": True, "result": True})
-        elif method in ("sendMessage", "sendChatAction"):
+        elif method in ("sendMessage", "editMessageText", "sendChatAction"):
             if method == "sendMessage":
                 with lock, open(SENT, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(body, ensure_ascii=False) + "\n")
