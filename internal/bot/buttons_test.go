@@ -117,23 +117,33 @@ func TestModelButtonsRespectTopicAndDefaultScope(t *testing.T) {
 		panel.Keyboard.InlineKeyboard[0][1].CallbackData != "model:here:luna" {
 		t.Fatalf("model panel = %+v", panel)
 	}
-	h.text(buttonUpdate(2, aliceChat, 17, aliceID, "model:here:luna"))
+	choice := buttonUpdate(2, aliceChat, 17, aliceID, "model:here:luna")
+	choice.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(choice)
 	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 17); got != "gpt-6-luna" {
 		t.Fatalf("topic model = %q", got)
 	}
-	updated := h.tg.Sent()[len(h.tg.Sent())-1]
-	if updated.Keyboard == nil || updated.Keyboard.InlineKeyboard[0][1].Text != "✓ Here: Luna" {
-		t.Fatalf("model panel did not show the selected choice: %+v", updated.Keyboard)
+	updated := h.tg.Sent()
+	if len(updated) != 1 || updated[0].Keyboard == nil ||
+		updated[0].Keyboard.InlineKeyboard[0][1].Text != "✓ Here: Luna" ||
+		!strings.Contains(updated[0].Text, "Model here: gpt-6-luna") {
+		t.Fatalf("model panel was not updated in place: %+v", updated)
 	}
-	h.text(buttonUpdate(3, aliceChat, 17, aliceID, "model:default:sol"))
+	defaultChoice := buttonUpdate(3, aliceChat, 17, aliceID, "model:default:sol")
+	defaultChoice.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(defaultChoice)
 	if got, _ := h.st.ModelSetting(context.Background(), aliceID, 0, 0); got != "gpt-6-sol" {
 		t.Fatalf("default model = %q", got)
 	}
 	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 17); got != "gpt-6-luna" {
 		t.Fatalf("default button overwrote topic model: %q", got)
 	}
+	updated = h.tg.Sent()
+	if len(updated) != 1 || updated[0].Keyboard.InlineKeyboard[1][0].Text != "✓ Default: Sol" {
+		t.Fatalf("default choice was not updated in place: %+v", updated)
+	}
 	before := len(h.tg.Sent())
-	h.text(buttonUpdate(3, aliceChat, 17, aliceID, "model:default:sol"))
+	h.text(defaultChoice)
 	if len(h.tg.Sent()) != before {
 		t.Fatal("duplicate callback sent a second confirmation")
 	}
@@ -142,6 +152,22 @@ func TestModelButtonsRespectTopicAndDefaultScope(t *testing.T) {
 	}
 	if len(h.fake.Invocations(t)) != 0 {
 		t.Fatal("model button unexpectedly started a Codex turn")
+	}
+}
+
+func TestModelButtonFallsBackWhenOriginalMessageCannotBeEdited(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.text(msg(1, aliceChat, aliceID, "/model"))
+	panel := h.tg.Sent()[0]
+	h.tg.SetEditError(errors.New("message can't be edited"))
+	choice := buttonUpdate(2, aliceChat, 0, aliceID, "model:here:luna")
+	choice.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(choice)
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 0); got != "gpt-6-luna" {
+		t.Fatalf("model = %q, want gpt-6-luna", got)
+	}
+	if len(h.tg.Sent()) != 2 || !strings.Contains(h.tg.LastText(), "Model here: gpt-6-luna") {
+		t.Fatalf("no fallback confirmation: %+v", h.tg.Sent())
 	}
 }
 

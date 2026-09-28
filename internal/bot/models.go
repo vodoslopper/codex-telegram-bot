@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"codex-telegram-bot/internal/telegram"
 )
 
 func modelName(value string) string {
@@ -93,6 +95,14 @@ func (b *Bot) cmdModel(ctx context.Context, p *Prepared, cmd *Command) error {
 	if err != nil {
 		return err
 	}
-	b.sendBestWithKeyboard(ctx, p.Scope, fmt.Sprintf("Model setting for %s updated. Model here: %s. New turns use this choice, including resumed sessions.", target, current), keyboard)
+	text := fmt.Sprintf("Model setting for %s updated. Model here: %s. New turns use this choice, including resumed sessions.", target, current)
+	if p.CallbackID != "" && p.CallbackMessageID > 0 {
+		if err := b.tg.EditMessageText(ctx, p.Scope.ChatID, p.CallbackMessageID, text, keyboard); err == nil || telegram.IsMessageNotModified(err) {
+			return nil
+		} else {
+			b.log.Warn("could not update the model button message", "error", err.Error())
+		}
+	}
+	b.sendBestWithKeyboard(ctx, p.Scope, text, keyboard)
 	return nil
 }
