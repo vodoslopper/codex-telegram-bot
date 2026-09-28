@@ -17,17 +17,21 @@ package telegram
 // Only the fields this bot acts on are decoded; Telegram sends many more and
 // encoding/json ignores what is not declared here.
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
-	// Everything below is decoded so the bot can tell "not a message" apart
-	// from "a message with no text", and log the difference. None of it is
-	// acted on.
-	EditedMessage *Message `json:"edited_message"`
-	ChannelPost   *Message `json:"channel_post"`
-	CallbackQuery *struct {
-		ID string `json:"id"`
-	} `json:"callback_query"`
-	MyChatMember *struct{} `json:"my_chat_member"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	EditedMessage *Message       `json:"edited_message"`
+	ChannelPost   *Message       `json:"channel_post"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
+	MyChatMember  *struct{}      `json:"my_chat_member"`
+}
+
+// CallbackQuery is a press on a button attached to a bot message. Inline-mode
+// callbacks have no Message and are not supported by this private-chat bot.
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    *User    `json:"from"`
+	Message *Message `json:"message"`
+	Data    string   `json:"data"`
 }
 
 // Kind names the update for the deduplication audit trail.
@@ -133,6 +137,21 @@ type SendMessageParams struct {
 	Text            string           `json:"text"`
 	MessageThreadID int64            `json:"message_thread_id,omitempty"`
 	LinkPreview     *LinkPreviewOpts `json:"link_preview_options,omitempty"`
+	ReplyMarkup     *InlineKeyboard  `json:"reply_markup,omitempty"`
+}
+
+type InlineKeyboard struct {
+	InlineKeyboard [][]InlineButton `json:"inline_keyboard"`
+}
+
+type InlineButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 // LinkPreviewOpts disables link previews, so a URL that happens to appear in a

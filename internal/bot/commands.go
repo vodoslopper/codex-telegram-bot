@@ -197,7 +197,10 @@ func (b *Bot) cmdSessions(ctx context.Context, p *Prepared, cmd *Command) error 
 	if !includeArchived {
 		sb.WriteString(" /sessions all to include archived.")
 	}
-	b.sendBest(ctx, p.Scope, sb.String())
+	if len(sessions) > maxSessionButtons {
+		fmt.Fprintf(&sb, "\nButtons show the %d most recent sessions; use /use <id> for the rest.", maxSessionButtons)
+	}
+	b.sendBestWithKeyboard(ctx, p.Scope, sb.String(), sessionsKeyboard(sessions, selected))
 	_ = selErr
 	return nil
 }

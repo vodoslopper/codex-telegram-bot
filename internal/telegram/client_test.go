@@ -104,7 +104,7 @@ func TestGetMe(t *testing.T) {
 	}
 }
 
-func TestGetUpdatesParsesAndFiltersToMessages(t *testing.T) {
+func TestGetUpdatesParsesMessagesAndCallbacks(t *testing.T) {
 	var seenBody map[string]any
 	srv, _ := newServer(t, func(w http.ResponseWriter, body string) {
 		_ = json.Unmarshal([]byte(body), &seenBody)
@@ -118,7 +118,11 @@ func TestGetUpdatesParsesAndFiltersToMessages(t *testing.T) {
 			  "chat":{"id":111,"type":"private"}}},
 			{"update_id":12,"message":{"message_id":12,"date":1700000002,"text":"group noise",
 			  "from":{"id":222,"is_bot":false,"first_name":"B"},
-			  "chat":{"id":-100222,"type":"supergroup"}}}
+			  "chat":{"id":-100222,"type":"supergroup"}}},
+			{"update_id":13,"callback_query":{"id":"cb-1","data":"model:here:luna",
+			  "from":{"id":111,"is_bot":false},
+			  "message":{"message_id":77,"date":1700000003,"message_thread_id":42,
+			    "chat":{"id":111,"type":"private"}}}}
 		]`)
 	})
 	c := newClient(t, srv)
@@ -127,8 +131,8 @@ func TestGetUpdatesParsesAndFiltersToMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUpdates: %v", err)
 	}
-	if len(updates) != 3 {
-		t.Fatalf("got %d updates, want 3", len(updates))
+	if len(updates) != 4 {
+		t.Fatalf("got %d updates, want 4", len(updates))
 	}
 	if updates[0].Message.Text != "hello" || updates[0].Message.From.ID != 111 {
 		t.Errorf("update 10 = %+v", updates[0].Message)
@@ -148,8 +152,11 @@ func TestGetUpdatesParsesAndFiltersToMessages(t *testing.T) {
 	if updates[0].Kind() != "message" {
 		t.Errorf("Kind = %q", updates[0].Kind())
 	}
+	if cb := updates[3].CallbackQuery; cb == nil || cb.From.ID != 111 || cb.Message.ThreadID() != 42 || cb.Data != "model:here:luna" {
+		t.Errorf("callback = %+v", cb)
+	}
 
-	// The request must ask only for messages and pass the offset through.
+	// The request must ask for messages and button presses.
 	if got := seenBody["offset"]; got != float64(10) {
 		t.Errorf("offset in the request = %v, want 10", got)
 	}
@@ -157,8 +164,36 @@ func TestGetUpdatesParsesAndFiltersToMessages(t *testing.T) {
 		t.Errorf("timeout in the request = %v, want 25", got)
 	}
 	allowed, _ := seenBody["allowed_updates"].([]any)
-	if len(allowed) != 1 || allowed[0] != "message" {
-		t.Errorf("allowed_updates = %v, want only \"message\"", allowed)
+	if len(allowed) != 2 || allowed[0] != "message" || allowed[1] != "callback_query" {
+		t.Errorf("allowed_updates = %v, want messages and callback queries", allowed)
+	}
+}
+
+func TestInteractiveMessageAndCommandRegistration(t *testing.T) {
+	srv, calls := newServer(t,
+		func(w http.ResponseWriter, _ string) { ok(w, `{"message_id":77}`) },
+		func(w http.ResponseWriter, _ string) { ok(w, `true`) },
+		func(w http.ResponseWriter, _ string) { ok(w, `true`) },
+	)
+	c := newClient(t, srv)
+	keyboard := &InlineKeyboard{InlineKeyboard: [][]InlineButton{{{Text: "Use session", CallbackData: "use:s7k3qm"}}}}
+	if _, err := c.SendMessageWithKeyboard(context.Background(), 111, 42, "Choose", keyboard); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AnswerCallbackQuery(context.Background(), "cb-1", "Done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetMyCommands(context.Background(), []BotCommand{{Command: "sessions", Description: "Switch sessions"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix((*calls)[0].Method, "/sendMessage") || !strings.Contains((*calls)[0].Body, `"callback_data":"use:s7k3qm"`) || !strings.Contains((*calls)[0].Body, `"message_thread_id":42`) {
+		t.Errorf("keyboard call = %+v", (*calls)[0])
+	}
+	if !strings.HasSuffix((*calls)[1].Method, "/answerCallbackQuery") || !strings.Contains((*calls)[1].Body, `"callback_query_id":"cb-1"`) {
+		t.Errorf("callback answer = %+v", (*calls)[1])
+	}
+	if !strings.HasSuffix((*calls)[2].Method, "/setMyCommands") || !strings.Contains((*calls)[2].Body, `"command":"sessions"`) {
+		t.Errorf("command registration = %+v", (*calls)[2])
 	}
 }
 
@@ -487,9 +522,7 @@ func TestUpdateKind(t *testing.T) {
 		{Update{Message: &Message{}}, "message"},
 		{Update{EditedMessage: &Message{}}, "edited_message"},
 		{Update{ChannelPost: &Message{}}, "channel_post"},
-		{Update{CallbackQuery: &struct {
-			ID string `json:"id"`
-		}{ID: "x"}}, "callback_query"},
+		{Update{CallbackQuery: &CallbackQuery{ID: "x"}}, "callback_query"},
 		{Update{MyChatMember: &struct{}{}}, "my_chat_member"},
 		{Update{}, "other"},
 	}

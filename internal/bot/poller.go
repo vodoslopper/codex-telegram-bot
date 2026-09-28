@@ -55,10 +55,26 @@ func (b *Bot) Prepare(ctx context.Context) error {
 	// TrimPrefix because a username from getMe has no "@", but be tolerant if
 	// that ever changes: ParseCommand compares bare names.
 	b.botUsername = strings.TrimPrefix(me.Username, "@")
+	b.registerCommands(ctx)
 	b.log.Info("connected to Telegram",
 		"bot_id", me.ID, "bot_username", me.Username,
 		"allowed_users", len(b.cfg.AllowedUserIDs))
 	return nil
+}
+
+// Command registration is cosmetic, so a Telegram outage does not prevent the
+// bot from polling. Retry it after a successful poll if startup could not do it.
+func (b *Bot) registerCommands(ctx context.Context) {
+	if b.commandsRegistered.Load() || ctx.Err() != nil {
+		return
+	}
+	registerCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := b.tg.SetMyCommands(registerCtx, botCommands()); err != nil {
+		b.log.Warn("could not register Telegram commands", "error", err.Error())
+		return
+	}
+	b.commandsRegistered.Store(true)
 }
 
 // Poll runs the getUpdates loop until ctx is cancelled.
@@ -104,6 +120,7 @@ func (b *Bot) Poll(ctx context.Context) error {
 		}
 		backoff = 0
 		if len(updates) == 0 {
+			b.registerCommands(ctx)
 			continue
 		}
 
@@ -141,6 +158,7 @@ func (b *Bot) Poll(ctx context.Context) error {
 			}
 			offset = next
 		}
+		b.registerCommands(ctx)
 	}
 }
 
@@ -153,7 +171,7 @@ func (b *Bot) Poll(ctx context.Context) error {
 // service down: one malformed message must not stop the bot for everybody.
 func (b *Bot) dispatch(_ context.Context, p *Prepared) {
 	ctx := b.workContext()
-	turn := !p.Duplicate && !p.Unsupported && p.Cmd == nil
+	turn := !p.Duplicate && !p.Unsupported && p.Cmd == nil && p.CallbackID == ""
 	if turn {
 		p.admitted = b.reserveTurn()
 		p.busy = !p.admitted
@@ -205,6 +223,7 @@ func (b *Bot) dispatch(_ context.Context, p *Prepared) {
 					"update_id", p.UpdateID, "panic", r, "stack", string(debug.Stack()))
 			}
 		}()
+		b.ackCallback(ctx, p)
 		if previous != nil {
 			if p.admitted && p.turnCtx.Err() == nil {
 				b.sendBest(p.turnCtx, p.Scope, "⏳ Queued behind an earlier message in this chat. Send /stop to cancel the active turn.")

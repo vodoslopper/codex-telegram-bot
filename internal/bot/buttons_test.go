@@ -1,0 +1,180 @@
+package bot
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"codex-telegram-bot/internal/telegram"
+	"codex-telegram-bot/internal/testkit"
+)
+
+func buttonUpdate(updateID, chatID, threadID, userID int64, data string) telegram.Update {
+	return telegram.Update{UpdateID: updateID, CallbackQuery: &telegram.CallbackQuery{
+		ID: "cb-" + itoa(updateID), Data: data,
+		From: &telegram.User{ID: userID},
+		Message: &telegram.Message{MessageID: 1000, Date: time.Now().Unix(),
+			MessageThreadID: threadID, Chat: telegram.Chat{ID: chatID, Type: "private"}},
+	}}
+}
+
+func TestPrepareRegistersTelegramCommandMenu(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	if err := h.b.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	commands := h.tg.Commands()
+	if len(commands) != 8 || commands[0].Command != "start" || commands[7].Command != "stop" {
+		t.Fatalf("registered commands = %+v", commands)
+	}
+}
+
+func TestCommandMenuRegistrationCanRetry(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.tg.SetCommandError(errors.New("temporary failure"))
+	if err := h.b.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.tg.Commands()) != 0 {
+		t.Fatal("failed registration was recorded as successful")
+	}
+	h.tg.SetCommandError(nil)
+	h.b.registerCommands(context.Background())
+	if len(h.tg.Commands()) != 8 {
+		t.Fatal("command menu was not registered after recovery")
+	}
+}
+
+func TestSessionButtonsSwitchWithinTopicAndRejectOtherOwner(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	first := sessionIDIn(h.text(testkit.TopicUpdate(1, aliceChat, 17, aliceID, "/new first")))
+	second := sessionIDIn(h.text(testkit.TopicUpdate(2, aliceChat, 17, aliceID, "/new second")))
+	if first == "" || second == "" || first == second {
+		t.Fatalf("session ids = %q, %q", first, second)
+	}
+	h.text(testkit.TopicUpdate(3, aliceChat, 17, aliceID, "/sessions"))
+	sent := h.tg.Sent()
+	panel := sent[len(sent)-1]
+	if panel.ThreadID != 17 || panel.Keyboard == nil || len(panel.Keyboard.InlineKeyboard) != 2 ||
+		panel.Keyboard.InlineKeyboard[0][0].CallbackData != "use:"+second {
+		t.Fatalf("session panel = %+v", panel)
+	}
+	h.text(buttonUpdate(4, aliceChat, 17, aliceID, "use:"+first))
+	if got := selected(t, h, aliceChat, 17, aliceID); got != first {
+		t.Fatalf("button selected %s, want %s", got, first)
+	}
+	if answers := h.tg.CallbackAnswers(); len(answers) != 1 || answers[0].ID != "cb-4" {
+		t.Fatalf("button acknowledgements = %+v", answers)
+	}
+	// A callback payload can be forged; ownership is still checked by /use.
+	h.text(buttonUpdate(5, bobChat, 0, bobID, "use:"+first))
+	if _, err := h.st.GetSelection(context.Background(), bobChat, 0, bobID); err == nil {
+		t.Fatal("another owner selected Alice's session through a button")
+	}
+	if got := h.tg.LastText(); !strings.Contains(got, "could not find that session") {
+		t.Fatalf("foreign session button replied %q", got)
+	}
+}
+
+func TestModelButtonsRespectTopicAndDefaultScope(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.text(testkit.TopicUpdate(1, aliceChat, 17, aliceID, "/model"))
+	panel := h.tg.Sent()[0]
+	if panel.Keyboard == nil || len(panel.Keyboard.InlineKeyboard) != 2 ||
+		panel.Keyboard.InlineKeyboard[0][1].CallbackData != "model:here:luna" {
+		t.Fatalf("model panel = %+v", panel)
+	}
+	h.text(buttonUpdate(2, aliceChat, 17, aliceID, "model:here:luna"))
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 17); got != "gpt-6-luna" {
+		t.Fatalf("topic model = %q", got)
+	}
+	updated := h.tg.Sent()[len(h.tg.Sent())-1]
+	if updated.Keyboard == nil || updated.Keyboard.InlineKeyboard[0][1].Text != "✓ Here: Luna" {
+		t.Fatalf("model panel did not show the selected choice: %+v", updated.Keyboard)
+	}
+	h.text(buttonUpdate(3, aliceChat, 17, aliceID, "model:default:sol"))
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, 0, 0); got != "gpt-6-sol" {
+		t.Fatalf("default model = %q", got)
+	}
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 17); got != "gpt-6-luna" {
+		t.Fatalf("default button overwrote topic model: %q", got)
+	}
+	before := len(h.tg.Sent())
+	h.text(buttonUpdate(3, aliceChat, 17, aliceID, "model:default:sol"))
+	if len(h.tg.Sent()) != before {
+		t.Fatal("duplicate callback sent a second confirmation")
+	}
+	if len(h.tg.CallbackAnswers()) != 3 {
+		t.Fatal("a callback press was left spinning")
+	}
+	if len(h.fake.Invocations(t)) != 0 {
+		t.Fatal("model button unexpectedly started a Codex turn")
+	}
+}
+
+func TestInvalidAndUnauthorizedButtons(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	h.text(buttonUpdate(1, aliceChat, 0, aliceID, "use:../../bad"))
+	if answers := h.tg.CallbackAnswers(); len(answers) != 1 || !strings.Contains(answers[0].Text, "unavailable") {
+		t.Fatalf("invalid callback was not explained: %+v", answers)
+	}
+	if len(h.tg.Sent()) != 0 {
+		t.Fatal("invalid button produced a chat message")
+	}
+	expired := buttonUpdate(2, aliceChat, 0, aliceID, "model:here:luna")
+	expired.CallbackQuery.Message.Date = 0
+	h.text(expired)
+	if answers := h.tg.CallbackAnswers(); len(answers) != 2 || !strings.Contains(answers[1].Text, "unavailable") {
+		t.Fatalf("expired callback was not explained: %+v", answers)
+	}
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 0); got != "" {
+		t.Fatalf("expired callback changed the model: %q", got)
+	}
+	h.text(buttonUpdate(3, malloryID, 0, malloryID, "model:here:sol"))
+	if len(h.tg.CallbackAnswers()) != 2 {
+		t.Fatal("unauthorized callback was acknowledged")
+	}
+	group := buttonUpdate(4, -1001, 0, aliceID, "model:here:sol")
+	group.CallbackQuery.Message.Chat.Type = "supergroup"
+	h.text(group)
+	if len(h.tg.CallbackAnswers()) != 2 {
+		t.Fatal("group callback was acknowledged")
+	}
+}
+
+func TestButtonIsAcknowledgedWhileTurnIsRunning(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: slowSpec()})
+	newSession(t, h, 1, aliceChat, aliceID, "slow")
+	turn, err := h.b.Claim(context.Background(), msg(2, aliceChat, aliceID, "slow task"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), turn)
+	h.fake.WaitForEmitted(t, 1, 15*time.Second)
+	button, err := h.b.Claim(context.Background(), buttonUpdate(3, aliceChat, 0, aliceID, "model:here:luna"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), button)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(h.tg.CallbackAnswers()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(h.tg.CallbackAnswers()) != 1 {
+		t.Fatal("model button was left spinning behind the active turn")
+	}
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 0); got != "" {
+		t.Fatalf("model button overtook the active turn: %q", got)
+	}
+	stop, err := h.b.Claim(context.Background(), msg(4, aliceChat, aliceID, "/stop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.b.dispatch(context.Background(), stop)
+	h.b.Wait()
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 0); got != "gpt-6-luna" {
+		t.Fatalf("queued model button never applied: %q", got)
+	}
+}

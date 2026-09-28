@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A stub Telegram Bot API, for smoke-testing the compiled binary end to end.
 
-It is deliberately dumb: it answers the six methods the bot calls, serves one
+It is deliberately dumb: it answers the methods the bot calls, serves one
 scripted update on the first getUpdates, and writes every sendMessage it receives
 to a file so the caller can assert on what a user would have seen.
 
@@ -77,6 +77,8 @@ class Handler(BaseHTTPRequestHandler):
                 # spinning while the smoke test watches it work.
                 time.sleep(1.0)
                 self._send({"ok": True, "result": []})
+        elif method in ("setMyCommands", "answerCallbackQuery"):
+            self._send({"ok": True, "result": True})
         elif method in ("sendMessage", "sendChatAction"):
             if method == "sendMessage":
                 with lock, open(SENT, "a", encoding="utf-8") as fh:

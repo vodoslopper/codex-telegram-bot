@@ -50,8 +50,14 @@ func (b *Bot) cmdModel(ctx context.Context, p *Prepared, cmd *Command) error {
 		source := "your default"
 		if local != "" {
 			source = "this chat or topic"
+		} else if userDefault, err := b.st.ModelSetting(ctx, p.Scope.UserID, 0, 0); err == nil && userDefault == "" {
+			source = "bot setting"
 		}
-		b.sendBest(ctx, p.Scope, fmt.Sprintf("Model here: %s (%s).\n%s", current, source, usage))
+		keyboard, err := b.modelKeyboard(ctx, p.Scope)
+		if err != nil {
+			return err
+		}
+		b.sendBestWithKeyboard(ctx, p.Scope, fmt.Sprintf("Model here: %s (%s).\n%s", current, source, usage), keyboard)
 		return nil
 	}
 	chatID, threadID := p.Scope.ChatID, p.Scope.ThreadID
@@ -83,6 +89,10 @@ func (b *Bot) cmdModel(ctx context.Context, p *Prepared, cmd *Command) error {
 	if err != nil {
 		return err
 	}
-	b.sendBest(ctx, p.Scope, fmt.Sprintf("Model setting for %s updated. Model here: %s. New turns use this choice, including resumed sessions.", target, current))
+	keyboard, err := b.modelKeyboard(ctx, p.Scope)
+	if err != nil {
+		return err
+	}
+	b.sendBestWithKeyboard(ctx, p.Scope, fmt.Sprintf("Model setting for %s updated. Model here: %s. New turns use this choice, including resumed sessions.", target, current), keyboard)
 	return nil
 }

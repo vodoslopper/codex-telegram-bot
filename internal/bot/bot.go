@@ -3,7 +3,7 @@
 //
 // The gates an update passes through, in order, are:
 //
-//  1. It is a plain message (not an edit, a channel post or a callback).
+//  1. It is a message or a button press (not an edit or a channel post).
 //  2. The chat is private. Groups and channels are dropped without a reply.
 //  3. from.id is on the allowlist. This is checked before any command is parsed,
 //     before the database is touched for that update, and before any process is
@@ -41,6 +41,9 @@ import (
 // in-memory fake.
 type Telegram interface {
 	SendMessage(ctx context.Context, chatID, threadID int64, text string) (*telegram.SentMessage, error)
+	SendMessageWithKeyboard(ctx context.Context, chatID, threadID int64, text string, keyboard *telegram.InlineKeyboard) (*telegram.SentMessage, error)
+	AnswerCallbackQuery(ctx context.Context, id, text string) error
+	SetMyCommands(ctx context.Context, commands []telegram.BotCommand) error
 	SendDocument(ctx context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error)
 	DownloadFile(ctx context.Context, fileID string) ([]byte, error)
 	SendChatAction(ctx context.Context, chatID, threadID int64, action string) error
@@ -121,7 +124,8 @@ type Bot struct {
 	// pendingTurns counts turns that are queued or running. It bounds how much
 	// work the bot takes on, and it is checked without blocking so the poller
 	// keeps receiving updates (including /stop) while turns are in flight.
-	pendingTurns atomic.Int64
+	pendingTurns       atomic.Int64
+	commandsRegistered atomic.Bool
 
 	// work is the context handed to update handlers, so that stopping the
 	// poller does not abort a Codex turn that is already editing files.
@@ -199,6 +203,8 @@ type Prepared struct {
 	Scope     Scope
 	// Cmd is non-nil for a command message.
 	Cmd *Command
+	// CallbackID is set for a button press; it must be acknowledged promptly.
+	CallbackID string
 	// Text is the message text, for a plain (non-command) message.
 	Text string
 	// Media is one supported attachment accompanying the caption.
@@ -212,17 +218,18 @@ type Prepared struct {
 	Duplicate bool
 	// The poller reserves a turn and its cancellation handle before launching
 	// a handler, so a following /stop can always find it.
-	admitted bool
-	busy     bool
-	turnCtx  context.Context
-	cancel   context.CancelFunc
-	entry    *inflightTurn
+	admitted      bool
+	busy          bool
+	turnCtx       context.Context
+	cancel        context.CancelFunc
+	entry         *inflightTurn
+	callbackAcked bool
 }
 
 // Claim applies the gates to one update and records it as processed.
 //
-// It returns nil when the update must be ignored completely (not a message, not
-// a private chat, sender not on the allowlist). It returns a Prepared with
+// It returns nil when the update must be ignored completely (unsupported type,
+// non-private chat, or sender not on the allowlist). It returns a Prepared with
 // Duplicate set when this update id was already handled, which is the signal to
 // resend an undelivered reply rather than to run Codex again.
 //
@@ -230,6 +237,28 @@ type Prepared struct {
 // caller advances its offset. That ordering is what makes the deduplication
 // guarantee hold across a crash.
 func (b *Bot) Claim(ctx context.Context, u telegram.Update) (*Prepared, error) {
+	if cb := u.CallbackQuery; cb != nil {
+		if cb.ID == "" || cb.From == nil || cb.From.IsBot || cb.Message == nil ||
+			!cb.Message.Chat.IsPrivate() || !b.cfg.Allowed(cb.From.ID) {
+			_, _ = b.claim(ctx, u.UpdateID, 0, 0, 0, "dropped:callback")
+			return nil, nil
+		}
+		scope := Scope{ChatID: cb.Message.Chat.ID, ThreadID: cb.Message.ThreadID(), UserID: cb.From.ID}
+		p := &Prepared{UpdateID: u.UpdateID, MessageID: cb.Message.MessageID, Scope: scope,
+			CallbackID: cb.ID}
+		// Telegram represents old, inaccessible messages with date 0. Their
+		// topic may be missing, so acknowledge the button without acting in a
+		// potentially wrong scope.
+		if cb.Message.Date != 0 {
+			p.Cmd = commandFromButton(cb.Data)
+		}
+		claimed, err := b.claim(ctx, u.UpdateID, scope.UserID, scope.ChatID, scope.ThreadID, "callback")
+		if err != nil {
+			return nil, err
+		}
+		p.Duplicate = !claimed
+		return p, nil
+	}
 	msg := u.Message
 	if msg == nil {
 		// Claim it anyway so Telegram stops redelivering something this build
@@ -334,17 +363,39 @@ func (b *Bot) Handle(ctx context.Context, p *Prepared) {
 	if p == nil {
 		return
 	}
+	b.ackCallback(ctx, p)
 	if p.Duplicate {
+		if p.CallbackID != "" {
+			return
+		}
 		b.recoverUndelivered(ctx, p)
 		return
 	}
 	switch {
+	case p.CallbackID != "" && p.Cmd == nil:
+		return
 	case p.Unsupported:
 		b.send(ctx, p.Scope, "I handle text, photos, documents, audio and video. Send /help for the commands.")
 	case p.Cmd != nil:
 		b.handleCommand(ctx, p)
 	default:
 		b.handleText(ctx, p)
+	}
+}
+
+func (b *Bot) ackCallback(ctx context.Context, p *Prepared) {
+	if p.CallbackID == "" || p.callbackAcked {
+		return
+	}
+	p.callbackAcked = true
+	answer := ""
+	if p.Cmd == nil && !p.Duplicate {
+		answer = "This button is unavailable. Send /help."
+	}
+	ackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := b.tg.AnswerCallbackQuery(ackCtx, p.CallbackID, answer); err != nil {
+		b.log.Warn("could not acknowledge a Telegram button", "error", err.Error())
 	}
 }
 
@@ -401,6 +452,10 @@ func (b *Bot) recoverUndelivered(ctx context.Context, p *Prepared) {
 // reply is better than a reordered one, and the caller uses the error to decide
 // whether the turn may be marked delivered.
 func (b *Bot) send(ctx context.Context, scope Scope, text string) error {
+	return b.sendWithKeyboard(ctx, scope, text, nil)
+}
+
+func (b *Bot) sendWithKeyboard(ctx context.Context, scope Scope, text string, keyboard *telegram.InlineKeyboard) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
@@ -410,7 +465,13 @@ func (b *Bot) send(ctx context.Context, scope Scope, text string) error {
 		if chunk == "" {
 			continue
 		}
-		if _, err := b.tg.SendMessage(ctx, scope.ChatID, scope.ThreadID, chunk); err != nil {
+		var err error
+		if i == len(chunks)-1 && keyboard != nil {
+			_, err = b.tg.SendMessageWithKeyboard(ctx, scope.ChatID, scope.ThreadID, chunk, keyboard)
+		} else {
+			_, err = b.tg.SendMessage(ctx, scope.ChatID, scope.ThreadID, chunk)
+		}
+		if err != nil {
 			if telegram.IsForbidden(err) || telegram.IsNotFound(err) {
 				// The user blocked the bot or deleted the chat. Nothing to
 				// retry, and worth a log line so the operator understands the
@@ -427,6 +488,12 @@ func (b *Bot) send(ctx context.Context, scope Scope, text string) error {
 		}
 	}
 	return nil
+}
+
+func (b *Bot) sendBestWithKeyboard(ctx context.Context, scope Scope, text string, keyboard *telegram.InlineKeyboard) {
+	if err := b.sendWithKeyboard(ctx, scope, text, keyboard); err != nil {
+		b.log.Debug("an interactive message failed", "chat_id", scope.ChatID, "error", err.Error())
+	}
 }
 
 // sendBest is send with the error logged and dropped, for cosmetic messages

@@ -453,6 +453,12 @@ type Sent struct {
 	Text     string
 	Document string
 	Data     []byte
+	Keyboard *telegram.InlineKeyboard
+}
+
+type CallbackAnswer struct {
+	ID   string
+	Text string
 }
 
 // FakeTelegram is an in-memory Bot API.
@@ -461,17 +467,20 @@ type Sent struct {
 // test can assert on the exact messages a user would have seen without a token,
 // a network, or a chat.
 type FakeTelegram struct {
-	mu       sync.Mutex
-	sent     []Sent
-	actions  []string
-	updates  []telegram.Update
-	files    map[string][]byte
-	nextID   int64
-	me       telegram.User
-	webhook  telegram.WebhookInfo
-	sendErr  error
-	pollErr  error
-	pollWait chan struct{}
+	mu         sync.Mutex
+	sent       []Sent
+	actions    []string
+	updates    []telegram.Update
+	files      map[string][]byte
+	nextID     int64
+	me         telegram.User
+	webhook    telegram.WebhookInfo
+	sendErr    error
+	pollErr    error
+	commandErr error
+	pollWait   chan struct{}
+	commands   []telegram.BotCommand
+	answers    []CallbackAnswer
 }
 
 // NewFakeTelegram builds a fake with a default bot identity.
@@ -516,6 +525,12 @@ func (f *FakeTelegram) SetPollError(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pollErr = err
+}
+
+func (f *FakeTelegram) SetCommandError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commandErr = err
 }
 
 // QueueUpdates appends updates to be returned by the next getUpdates calls.
@@ -565,6 +580,18 @@ func (f *FakeTelegram) Actions() []string {
 	return out
 }
 
+func (f *FakeTelegram) Commands() []telegram.BotCommand {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]telegram.BotCommand(nil), f.commands...)
+}
+
+func (f *FakeTelegram) CallbackAnswers() []CallbackAnswer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]CallbackAnswer(nil), f.answers...)
+}
+
 // Reset clears the recorded messages.
 func (f *FakeTelegram) Reset() {
 	f.mu.Lock()
@@ -574,15 +601,36 @@ func (f *FakeTelegram) Reset() {
 }
 
 // SendMessage records a message.
-func (f *FakeTelegram) SendMessage(_ context.Context, chatID, threadID int64, text string) (*telegram.SentMessage, error) {
+func (f *FakeTelegram) SendMessage(ctx context.Context, chatID, threadID int64, text string) (*telegram.SentMessage, error) {
+	return f.SendMessageWithKeyboard(ctx, chatID, threadID, text, nil)
+}
+
+func (f *FakeTelegram) SendMessageWithKeyboard(_ context.Context, chatID, threadID int64, text string, keyboard *telegram.InlineKeyboard) (*telegram.SentMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}
 	f.nextID++
-	f.sent = append(f.sent, Sent{ChatID: chatID, ThreadID: threadID, Text: text})
+	f.sent = append(f.sent, Sent{ChatID: chatID, ThreadID: threadID, Text: text, Keyboard: keyboard})
 	return &telegram.SentMessage{MessageID: f.nextID}, nil
+}
+
+func (f *FakeTelegram) AnswerCallbackQuery(_ context.Context, id, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answers = append(f.answers, CallbackAnswer{ID: id, Text: text})
+	return nil
+}
+
+func (f *FakeTelegram) SetMyCommands(_ context.Context, commands []telegram.BotCommand) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.commandErr != nil {
+		return f.commandErr
+	}
+	f.commands = append([]telegram.BotCommand(nil), commands...)
+	return nil
 }
 
 func (f *FakeTelegram) SendDocument(_ context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error) {

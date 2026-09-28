@@ -304,6 +304,14 @@ Private chats only. Groups, supergroups and channels are dropped silently, and
 messages from anybody not on the allowlist are dropped without a reply —
 answering them would confirm the bot exists to strangers.
 
+The bot registers its main commands with Telegram when it connects. Open the
+chat's command menu or type `/` to choose one. `/sessions` shows buttons for the
+eight most recent sessions; tap one to switch in that chat or topic. `/model`
+shows buttons for the current chat or topic and your default. Text commands
+still work for every option, including older sessions beyond the button list.
+Ordinary messages remain free-form Codex prompts. Button presses follow the
+same user allowlist and private-chat rules as messages.
+
 | Command | Effect |
 | --- | --- |
 | `/start`, `/help` | Commands, the workspace in use, the sandbox, the current selection. |

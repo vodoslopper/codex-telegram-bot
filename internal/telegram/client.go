@@ -304,13 +304,10 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, pollTimeout time.
 		Timeout        int      `json:"timeout,omitempty"`
 		AllowedUpdates []string `json:"allowed_updates"`
 	}{
-		Offset:  offset,
-		Limit:   limit,
-		Timeout: int(pollTimeout.Seconds()),
-		// Only plain messages are handled, so only plain messages are
-		// requested. Everything else would be delivered, decoded, dropped and
-		// would still advance the offset — pure noise.
-		AllowedUpdates: []string{"message"},
+		Offset:         offset,
+		Limit:          limit,
+		Timeout:        int(pollTimeout.Seconds()),
+		AllowedUpdates: []string{"message", "callback_query"},
 	}
 	var updates []Update
 	if err := c.call(ctx, "getUpdates", body, &updates); err != nil {
@@ -325,6 +322,10 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, pollTimeout time.
 // split first; internal/textsplit does that. The check here is a second line of
 // defence against a caller that forgot.
 func (c *Client) SendMessage(ctx context.Context, chatID, threadID int64, text string) (*SentMessage, error) {
+	return c.SendMessageWithKeyboard(ctx, chatID, threadID, text, nil)
+}
+
+func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID, threadID int64, text string, keyboard *InlineKeyboard) (*SentMessage, error) {
 	if text == "" {
 		return nil, errors.New("telegram: refusing to send an empty message")
 	}
@@ -333,12 +334,26 @@ func (c *Client) SendMessage(ctx context.Context, chatID, threadID int64, text s
 		body.MessageThreadID = threadID
 	}
 	body.LinkPreview = &LinkPreviewOpts{IsDisabled: true}
+	body.ReplyMarkup = keyboard
 
 	var sent SentMessage
 	if err := c.call(ctx, "sendMessage", body, &sent); err != nil {
 		return nil, err
 	}
 	return &sent, nil
+}
+
+func (c *Client) AnswerCallbackQuery(ctx context.Context, id, text string) error {
+	return c.call(ctx, "answerCallbackQuery", struct {
+		ID   string `json:"callback_query_id"`
+		Text string `json:"text,omitempty"`
+	}{id, text}, nil)
+}
+
+func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
+	return c.call(ctx, "setMyCommands", struct {
+		Commands []BotCommand `json:"commands"`
+	}{commands}, nil)
 }
 
 // SendChatAction shows "typing…" for about five seconds. Failures are not
