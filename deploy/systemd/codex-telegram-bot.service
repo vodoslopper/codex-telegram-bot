@@ -82,7 +82,6 @@ ProtectHostname=yes
 # available so it can create Codex's shell sandbox.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictRealtime=yes
-RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 UMask=0077
