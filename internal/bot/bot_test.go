@@ -418,14 +418,41 @@ func TestRename(t *testing.T) {
 	if sess.Name != "after with spaces" {
 		t.Errorf("Name = %q, want the whole remainder as the name", sess.Name)
 	}
-	for i, bad := range []string{"/rename", "/rename " + id, "/rename nope x"} {
+	if got := h.text(msg(3, aliceChat, aliceID, "/rename selected name with spaces")); !strings.Contains(got, `"selected name with spaces"`) {
+		t.Errorf("selected /rename replied %q", got)
+	}
+	sess, _ = h.st.GetSession(context.Background(), id, aliceID)
+	if sess.Name != "selected name with spaces" {
+		t.Errorf("selected /rename set name to %q", sess.Name)
+	}
+	for i, bad := range []string{"/rename", "/rename " + id} {
 		if got := h.text(msg(int64(30+i), aliceChat, aliceID, bad)); got == "" {
 			t.Errorf("%q produced no answer at all", bad)
 		}
 	}
 	sess, _ = h.st.GetSession(context.Background(), id, aliceID)
-	if sess.Name != "after with spaces" {
+	if sess.Name != "selected name with spaces" {
 		t.Errorf("a bad /rename changed the name to %q", sess.Name)
+	}
+	if got := h.text(msg(40, bobChat, bobID, "/rename absent selection")); !strings.Contains(got, "No session is selected") {
+		t.Errorf("/rename without a selection replied %q", got)
+	}
+}
+
+func TestRenameUsesSelectedTopicSession(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	first := sessionIDIn(h.text(testkit.TopicUpdate(1, aliceChat, 17, aliceID, "/new first")))
+	second := sessionIDIn(h.text(testkit.TopicUpdate(2, aliceChat, 18, aliceID, "/new second")))
+	if first == "" || second == "" {
+		t.Fatalf("session ids = %q, %q", first, second)
+	}
+	if got := h.text(testkit.TopicUpdate(3, aliceChat, 17, aliceID, "/rename topic work")); !strings.Contains(got, "Renamed "+first) {
+		t.Errorf("topic /rename replied %q", got)
+	}
+	firstSession, _ := h.st.GetSession(context.Background(), first, aliceID)
+	secondSession, _ := h.st.GetSession(context.Background(), second, aliceID)
+	if firstSession.Name != "topic work" || secondSession.Name != "second" {
+		t.Errorf("topic rename changed names to %q and %q", firstSession.Name, secondSession.Name)
 	}
 }
 

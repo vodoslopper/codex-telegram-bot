@@ -16,6 +16,7 @@ func botCommands() []telegram.BotCommand {
 		{Command: "new", Description: "Start a new session"},
 		{Command: "sessions", Description: "List and switch sessions"},
 		{Command: "session", Description: "Show the selected session and status"},
+		{Command: "rename", Description: "Rename the selected session"},
 		{Command: "usage", Description: "Show context and rate limits"},
 		{Command: "model", Description: "Choose the model here or by default"},
 		{Command: "stop", Description: "Cancel the active turn"},

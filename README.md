@@ -326,7 +326,8 @@ same user allowlist and private-chat rules as messages.
 | `/model` | Show the effective GPT-6 model in this chat or topic. |
 | `/model luna` or `/model sol` | Save a model override for this chat or topic. `/model reset` restores inheritance. |
 | `/model default luna` or `/model default sol` | Save your default model for chats and topics without an override. `/model default reset` restores `BOT_CODEX_MODEL`. |
-| `/rename <id> <name>` | Relabel a session. |
+| `/rename <name>` | Rename the session selected in this chat or topic. Name may contain spaces. |
+| `/rename <id> <name>` | Rename one of your sessions by ID. |
 | `/archive <id>` | Hide and deselect a session in every chat and topic. Codex history is untouched; `/unarchive <id>` brings it back. |
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |

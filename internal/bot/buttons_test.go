@@ -26,7 +26,7 @@ func TestPrepareRegistersTelegramCommandMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := h.tg.Commands()
-	if len(commands) != 8 || commands[0].Command != "start" || commands[7].Command != "stop" {
+	if len(commands) != 9 || commands[0].Command != "start" || commands[5].Command != "rename" || commands[8].Command != "stop" {
 		t.Fatalf("registered commands = %+v", commands)
 	}
 }
@@ -42,7 +42,7 @@ func TestCommandMenuRegistrationCanRetry(t *testing.T) {
 	}
 	h.tg.SetCommandError(nil)
 	h.b.registerCommands(context.Background())
-	if len(h.tg.Commands()) != 8 {
+	if len(h.tg.Commands()) != 9 {
 		t.Fatal("command menu was not registered after recovery")
 	}
 }

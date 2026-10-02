@@ -108,7 +108,8 @@ func (b *Bot) helpText(ctx context.Context, scope Scope, greeting bool) string {
 /model              show the model used in this chat or topic
 /model luna|sol     select a model here; /model reset inherits your default
 /model default luna|sol  set your default for other chats and topics
-/rename <id> <name> rename a session
+/rename <name>      rename the selected session
+/rename <id> <name> rename a session by id
 /archive <id>       hide a session from /sessions (Codex history is kept)
 /unarchive <id>     show an archived session again
 /stop               cancel the turn running in this chat
@@ -361,19 +362,28 @@ func (b *Bot) statusText(ctx context.Context, scope Scope, sess store.Session) s
 // --- /rename, /archive -----------------------------------------------------
 
 func (b *Bot) cmdRename(ctx context.Context, p *Prepared, cmd *Command) error {
+	if cmd.Rest == "" {
+		b.sendBest(ctx, p.Scope, "Usage: /rename <new name> or /rename <session-id> <new name>")
+		return nil
+	}
 	id, remainder := firstField(cmd.Rest)
-	if id == "" {
-		b.sendBest(ctx, p.Scope, "Usage: /rename <session-id> <new name>")
-		return nil
-	}
-	if !sessid.Valid(id) {
-		b.sendBest(ctx, p.Scope, badIDText(id))
-		return nil
-	}
-	name := strings.TrimSpace(remainder)
-	if name == "" {
-		b.sendBest(ctx, p.Scope, "Usage: /rename <session-id> <new name> — the name may contain spaces.")
-		return nil
+	name := cmd.Rest
+	if sessid.Valid(id) {
+		name = strings.TrimSpace(remainder)
+		if name == "" {
+			b.sendBest(ctx, p.Scope, "Usage: /rename <session-id> <new name> — the name may contain spaces.")
+			return nil
+		}
+	} else {
+		sess, err := b.st.SelectedSession(ctx, p.Scope.ChatID, p.Scope.ThreadID, p.Scope.UserID)
+		if errors.Is(err, store.ErrNotFound) {
+			b.sendBest(ctx, p.Scope, "No session is selected here. Send /new [name] to create one, or use /rename <session-id> <new name>.")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		id = sess.ID
 	}
 	if len(name) > 120 {
 		b.sendBest(ctx, p.Scope, "That name is longer than 120 characters.")
