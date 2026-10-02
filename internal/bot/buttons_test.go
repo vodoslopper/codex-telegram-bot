@@ -26,7 +26,7 @@ func TestPrepareRegistersTelegramCommandMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := h.tg.Commands()
-	if len(commands) != 9 || commands[0].Command != "start" || commands[5].Command != "rename" || commands[8].Command != "stop" {
+	if len(commands) != 10 || commands[0].Command != "start" || commands[5].Command != "rename" || commands[6].Command != "archive" || commands[9].Command != "stop" {
 		t.Fatalf("registered commands = %+v", commands)
 	}
 }
@@ -42,8 +42,59 @@ func TestCommandMenuRegistrationCanRetry(t *testing.T) {
 	}
 	h.tg.SetCommandError(nil)
 	h.b.registerCommands(context.Background())
-	if len(h.tg.Commands()) != 9 {
+	if len(h.tg.Commands()) != 10 {
 		t.Fatal("command menu was not registered after recovery")
+	}
+}
+
+func TestArchiveButtonsChooseSessionAndCheckOwner(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	first := sessionIDIn(h.text(testkit.TopicUpdate(1, aliceChat, 17, aliceID, "/new first")))
+	second := sessionIDIn(h.text(testkit.TopicUpdate(2, aliceChat, 18, aliceID, "/new second")))
+	if first == "" || second == "" || first == second {
+		t.Fatalf("session ids = %q, %q", first, second)
+	}
+	h.text(testkit.TopicUpdate(3, aliceChat, 17, aliceID, "/archive"))
+	sent := h.tg.Sent()
+	panel := sent[len(sent)-1]
+	if panel.ThreadID != 17 || panel.Keyboard == nil || len(panel.Keyboard.InlineKeyboard) != 2 ||
+		panel.Keyboard.InlineKeyboard[0][0].CallbackData != "archive:"+second ||
+		panel.Keyboard.InlineKeyboard[1][0].CallbackData != "archive:"+first ||
+		!strings.Contains(panel.Text, "* "+first+"  first") ||
+		!strings.Contains(panel.Text, "  "+second+"  second") {
+		t.Fatalf("archive panel = %+v", panel)
+	}
+	if got, _ := h.st.GetSession(context.Background(), first, aliceID); got.Archived {
+		t.Fatal("showing the archive choices already archived a session")
+	}
+	forged := buttonUpdate(4, bobChat, 0, bobID, "archive:"+second)
+	h.text(forged)
+	if got, _ := h.st.GetSession(context.Background(), second, aliceID); got.Archived {
+		t.Fatal("another user archived Alice's session")
+	}
+	choice := buttonUpdate(5, aliceChat, 17, aliceID, "archive:"+first)
+	choice.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(choice)
+	if got, _ := h.st.GetSession(context.Background(), first, aliceID); !got.Archived {
+		t.Fatal("chosen session was not archived")
+	}
+	if got, _ := h.st.GetSession(context.Background(), second, aliceID); got.Archived {
+		t.Fatal("other session was archived")
+	}
+	updated := h.tg.Sent()
+	if len(updated) != len(sent)+1 {
+		t.Fatalf("archive callback sent unexpected messages: %+v", updated)
+	}
+	archivedPanel := updated[len(sent)-1]
+	if !strings.Contains(archivedPanel.Text, "Archived "+first) ||
+		archivedPanel.Keyboard == nil || len(archivedPanel.Keyboard.InlineKeyboard) != 0 {
+		t.Fatalf("archive panel was not completed in place: %+v", archivedPanel)
+	}
+	if got := selected(t, h, aliceChat, 18, aliceID); got != second {
+		t.Fatalf("archiving a session changed another topic's selection to %q", got)
+	}
+	if got := h.text(msg(6, bobChat, bobID, "/archive")); !strings.Contains(got, "no sessions to archive") {
+		t.Errorf("empty archive list replied %q", got)
 	}
 }
 

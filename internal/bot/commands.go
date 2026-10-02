@@ -110,7 +110,8 @@ func (b *Bot) helpText(ctx context.Context, scope Scope, greeting bool) string {
 /model default luna|sol  set your default for other chats and topics
 /rename <name>      rename the selected session
 /rename <id> <name> rename a session by id
-/archive <id>       hide a session from /sessions (Codex history is kept)
+/archive            choose a session to hide from /sessions
+/archive <id>       hide a session by id (Codex history is kept)
 /unarchive <id>     show an archived session again
 /stop               cancel the turn running in this chat
 /help               this message
@@ -401,6 +402,33 @@ func (b *Bot) cmdArchive(ctx context.Context, p *Prepared, cmd *Command, archive
 	if !archive {
 		verb = "unarchive"
 	}
+	if archive && len(cmd.Args) == 0 {
+		sessions, err := b.st.ListSessions(ctx, p.Scope.UserID, false)
+		if err != nil {
+			return err
+		}
+		if len(sessions) == 0 {
+			b.sendBest(ctx, p.Scope, "You have no sessions to archive. Send /new [name] to create one.")
+			return nil
+		}
+		selected, _ := b.selectedID(ctx, p.Scope)
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Choose a session to archive (%d):\n", len(sessions))
+		for _, s := range sessions {
+			marker := " "
+			if s.ID == selected {
+				marker = "*"
+			}
+			fmt.Fprintf(&sb, "%s %s  %s\n", marker, s.ID, sessionSummaryLine(s))
+		}
+		sb.WriteString("\n* = selected here. Tap a session to archive it, or send /archive <id>. " +
+			"Archiving clears its selections and retained attachments; Codex history is kept.")
+		if len(sessions) > maxSessionButtons {
+			fmt.Fprintf(&sb, " Buttons show the %d most recent sessions; use /archive <id> for the rest.", maxSessionButtons)
+		}
+		b.sendBestWithKeyboard(ctx, p.Scope, sb.String(), archiveKeyboard(sessions))
+		return nil
+	}
 	id, err := sessionArg(cmd, verb)
 	if err != nil {
 		b.sendBest(ctx, p.Scope, err.Error())
@@ -440,9 +468,18 @@ func (b *Bot) cmdArchive(ctx context.Context, p *Prepared, cmd *Command, archive
 		if len(cleanupErrors) != 0 {
 			return fmt.Errorf("session archived, but some attachments could not be removed: %w", errors.Join(cleanupErrors...))
 		}
-		b.sendBest(ctx, p.Scope, fmt.Sprintf(
+		text := fmt.Sprintf(
 			"Archived %s and cleared its chat and topic selections. Where it was selected, the next message starts a new session unless you select another. Its Codex history is untouched; "+
-				"/sessions all still lists it and /unarchive %s brings it back.", id, id))
+				"/sessions all still lists it and /unarchive %s brings it back.", id, id)
+		if p.CallbackID != "" && p.CallbackMessageID > 0 {
+			if err := b.tg.EditMessageText(ctx, p.Scope.ChatID, p.CallbackMessageID, text,
+				&telegram.InlineKeyboard{}); err == nil || telegram.IsMessageNotModified(err) {
+				return nil
+			} else {
+				b.log.Warn("could not update the archive button message", "error", err.Error())
+			}
+		}
+		b.sendBest(ctx, p.Scope, text)
 	} else {
 		b.sendBest(ctx, p.Scope, fmt.Sprintf("Unarchived %s.", id))
 	}

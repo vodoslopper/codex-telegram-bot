@@ -328,7 +328,8 @@ same user allowlist and private-chat rules as messages.
 | `/model default luna` or `/model default sol` | Save your default model for chats and topics without an override. `/model default reset` restores `BOT_CODEX_MODEL`. |
 | `/rename <name>` | Rename the session selected in this chat or topic. Name may contain spaces. |
 | `/rename <id> <name>` | Rename one of your sessions by ID. |
-| `/archive <id>` | Hide and deselect a session in every chat and topic. Codex history is untouched; `/unarchive <id>` brings it back. |
+| `/archive` | Choose one of your sessions to archive with a button. |
+| `/archive <id>` | Hide and deselect a session in every chat and topic. Retained attachments are removed; Codex history is untouched. `/unarchive <id>` brings the session back. |
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |
 
