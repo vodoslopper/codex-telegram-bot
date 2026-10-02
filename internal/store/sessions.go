@@ -28,6 +28,11 @@ type Session struct {
 	LastTurnAt    time.Time // zero when no turn has run
 }
 
+var (
+	ErrNotArchived = errors.New("session is not archived")
+	ErrSessionBusy = errors.New("session has a running turn")
+)
+
 // HasThread reports whether this session can be resumed.
 func (s Session) HasThread() bool { return s.CodexThreadID != "" }
 
@@ -229,6 +234,34 @@ func (s *Store) SetArchived(ctx context.Context, id string, ownerUserID int64, a
 		}
 	}
 	return tx.Commit()
+}
+
+// DeleteArchivedSession removes an owned archived session and its dependent
+// rows. A running turn prevents deletion, even if an archived session was
+// explicitly selected again after archiving.
+func (s *Store) DeleteArchivedSession(ctx context.Context, id string, ownerUserID int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions
+		WHERE id = ? AND owner_user_id = ? AND archived = 1
+		AND NOT EXISTS (SELECT 1 FROM turns WHERE session_id = sessions.id AND status = 'running')`,
+		id, ownerUserID)
+	if err != nil {
+		return fmt.Errorf("store: delete archived session %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete archived session %q: %w", id, err)
+	}
+	if n == 1 {
+		return nil
+	}
+	sess, err := s.GetSession(ctx, id, ownerUserID)
+	if err != nil {
+		return err
+	}
+	if !sess.Archived {
+		return ErrNotArchived
+	}
+	return ErrSessionBusy
 }
 
 // SetThreadID records the Codex thread a session points at.

@@ -72,6 +72,7 @@ type Store interface {
 	ListSessions(ctx context.Context, ownerUserID int64, includeArchived bool) ([]store.Session, error)
 	RenameSession(ctx context.Context, id string, ownerUserID int64, name string) error
 	SetArchived(ctx context.Context, id string, ownerUserID int64, archived bool) error
+	DeleteArchivedSession(ctx context.Context, id string, ownerUserID int64) error
 	SetThreadID(ctx context.Context, id string, ownerUserID int64, threadID string) error
 	TouchLastTurn(ctx context.Context, id string, ownerUserID int64, at time.Time) error
 	SelectSession(ctx context.Context, chatID, threadID, userID int64, sessionID string) error

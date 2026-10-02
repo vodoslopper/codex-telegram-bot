@@ -407,6 +407,27 @@ func TestArchiveHidesWithoutDeleting(t *testing.T) {
 	}
 }
 
+func TestDeleteRequiresArchivedSession(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	id := newSession(t, h, 1, aliceChat, aliceID, "work")
+	if got := h.text(msg(2, aliceChat, aliceID, "/delete "+id)); !strings.Contains(got, "only archived sessions") {
+		t.Errorf("delete active session replied %q", got)
+	}
+	if _, err := h.st.GetSession(context.Background(), id, aliceID); err != nil {
+		t.Fatalf("active session was deleted: %v", err)
+	}
+	if got := h.text(msg(3, bobChat, bobID, "/delete "+id)); !strings.Contains(got, "could not find") {
+		t.Errorf("other owner's delete replied %q", got)
+	}
+	h.text(msg(4, aliceChat, aliceID, "/archive "+id))
+	if got := h.text(msg(5, aliceChat, aliceID, "/delete "+id)); !strings.Contains(got, "Deleted archived session "+id) {
+		t.Errorf("delete archived session replied %q", got)
+	}
+	if list := h.text(msg(6, aliceChat, aliceID, "/sessions all")); strings.Contains(list, id) {
+		t.Errorf("deleted session remains in listing: %q", list)
+	}
+}
+
 func TestRename(t *testing.T) {
 	h := newHarness(t, harnessOpts{spec: successSpec("a", "a")})
 	id := newSession(t, h, 1, aliceChat, aliceID, "before")

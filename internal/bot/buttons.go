@@ -18,6 +18,7 @@ func botCommands() []telegram.BotCommand {
 		{Command: "session", Description: "Show the selected session and status"},
 		{Command: "rename", Description: "Rename the selected session"},
 		{Command: "archive", Description: "Choose a session to archive"},
+		{Command: "delete", Description: "Delete an archived session"},
 		{Command: "usage", Description: "Show context and rate limits"},
 		{Command: "model", Description: "Choose the model here or by default"},
 		{Command: "stop", Description: "Cancel the active turn"},
@@ -32,6 +33,9 @@ func commandFromButton(data string) *Command {
 	}
 	if id, ok := strings.CutPrefix(data, "archive:"); ok && sessid.Valid(id) {
 		return &Command{Name: "archive", Args: []string{id}}
+	}
+	if id, ok := strings.CutPrefix(data, "delete:"); ok && sessid.Valid(id) {
+		return &Command{Name: "delete", Args: []string{id}}
 	}
 	if value, ok := strings.CutPrefix(data, "model:here:"); ok && modelButtonValue(value) {
 		return &Command{Name: "model", Args: []string{value}}
@@ -103,6 +107,21 @@ func archiveKeyboard(sessions []store.Session) *telegram.InlineKeyboard {
 		rows = append(rows, []telegram.InlineButton{{
 			Text:         "Archive " + session.ID + " · " + truncateRunes(name, 28),
 			CallbackData: "archive:" + session.ID,
+		}})
+	}
+	return &telegram.InlineKeyboard{InlineKeyboard: rows}
+}
+
+func deleteKeyboard(sessions []store.Session) *telegram.InlineKeyboard {
+	rows := make([][]telegram.InlineButton, 0, min(len(sessions), maxSessionButtons))
+	for _, session := range sessions[:min(len(sessions), maxSessionButtons)] {
+		name := strings.Join(strings.Fields(session.Name), " ")
+		if name == "" {
+			name = "unnamed"
+		}
+		rows = append(rows, []telegram.InlineButton{{
+			Text:         "Delete " + session.ID + " · " + truncateRunes(name, 28),
+			CallbackData: "delete:" + session.ID,
 		}})
 	}
 	return &telegram.InlineKeyboard{InlineKeyboard: rows}

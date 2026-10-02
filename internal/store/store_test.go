@@ -299,6 +299,61 @@ func TestRenameAndArchive(t *testing.T) {
 	}
 }
 
+func TestDeleteArchivedSession(t *testing.T) {
+	s := openStore(t)
+	sess, err := s.CreateSession(ctx(), 7, "delete me", "/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, err := s.CreateSession(ctx(), 7, "keep", "/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteArchivedSession(ctx(), sess.ID, 7); !errors.Is(err, ErrNotArchived) {
+		t.Fatalf("delete active session = %v, want ErrNotArchived", err)
+	}
+	if err := s.SetArchived(ctx(), sess.ID, 7, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteArchivedSession(ctx(), sess.ID, 8); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete another owner's session = %v, want ErrNotFound", err)
+	}
+	if err := s.SelectSession(ctx(), 7, 17, 7, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	turnID, err := s.BeginTurn(ctx(), 42, sess.ID, 7, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteArchivedSession(ctx(), sess.ID, 7); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("delete session with running turn = %v, want ErrSessionBusy", err)
+	}
+	if err := s.FinishTurn(ctx(), turnID, TurnCompleted, "", "saved reply", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRetainedMedia(ctx(), sess.ID, 7, "/ws/.codex-telegram-media-test/attachment.bin", "document"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteArchivedSession(ctx(), sess.ID, 7); err != nil {
+		t.Fatalf("delete archived session: %v", err)
+	}
+	if _, err := s.GetSession(ctx(), sess.ID, 7); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted session lookup = %v", err)
+	}
+	if _, err := s.GetSelection(ctx(), 7, 17, 7); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted session selection = %v", err)
+	}
+	if _, err := s.TurnByUpdate(ctx(), 42); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted session turn = %v", err)
+	}
+	if media, err := s.RetainedMedia(ctx(), sess.ID, 7); err != nil || len(media) != 0 {
+		t.Errorf("deleted session media = %+v, %v", media, err)
+	}
+	if _, err := s.GetSession(ctx(), keep.ID, 7); err != nil {
+		t.Errorf("other session was affected: %v", err)
+	}
+}
+
 func TestSetThreadIDRejectsANonUUID(t *testing.T) {
 	s := openStore(t)
 	sess, _ := s.CreateSession(ctx(), 1, "x", "/ws")

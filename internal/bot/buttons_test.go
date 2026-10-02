@@ -26,7 +26,7 @@ func TestPrepareRegistersTelegramCommandMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := h.tg.Commands()
-	if len(commands) != 10 || commands[0].Command != "start" || commands[5].Command != "rename" || commands[6].Command != "archive" || commands[9].Command != "stop" {
+	if len(commands) != 11 || commands[0].Command != "start" || commands[5].Command != "rename" || commands[6].Command != "archive" || commands[7].Command != "delete" || commands[10].Command != "stop" {
 		t.Fatalf("registered commands = %+v", commands)
 	}
 }
@@ -42,8 +42,37 @@ func TestCommandMenuRegistrationCanRetry(t *testing.T) {
 	}
 	h.tg.SetCommandError(nil)
 	h.b.registerCommands(context.Background())
-	if len(h.tg.Commands()) != 10 {
+	if len(h.tg.Commands()) != 11 {
 		t.Fatal("command menu was not registered after recovery")
+	}
+}
+
+func TestDeleteButtonsListArchivedSessions(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	archived := sessionIDIn(h.text(msg(1, aliceChat, aliceID, "/new old")))
+	active := sessionIDIn(h.text(msg(2, aliceChat, aliceID, "/new active")))
+	h.text(msg(3, aliceChat, aliceID, "/archive "+archived))
+	h.text(msg(4, aliceChat, aliceID, "/delete"))
+	sent := h.tg.Sent()
+	panel := sent[len(sent)-1]
+	if panel.Keyboard == nil || len(panel.Keyboard.InlineKeyboard) != 1 ||
+		panel.Keyboard.InlineKeyboard[0][0].CallbackData != "delete:"+archived ||
+		!strings.Contains(panel.Text, archived+"  old") || strings.Contains(panel.Text, active) {
+		t.Fatalf("delete panel = %+v", panel)
+	}
+	choice := buttonUpdate(5, aliceChat, 0, aliceID, "delete:"+archived)
+	choice.CallbackQuery.Message.MessageID = panel.MessageID
+	h.text(choice)
+	updated := h.tg.Sent()
+	if len(updated) != len(sent) || !strings.Contains(updated[len(updated)-1].Text, "Deleted archived session "+archived) ||
+		updated[len(updated)-1].Keyboard == nil || len(updated[len(updated)-1].Keyboard.InlineKeyboard) != 0 {
+		t.Fatalf("delete panel was not completed in place: %+v", updated[len(updated)-1])
+	}
+	if _, err := h.st.GetSession(context.Background(), archived, aliceID); err == nil {
+		t.Fatal("deleted session remains")
+	}
+	if _, err := h.st.GetSession(context.Background(), active, aliceID); err != nil {
+		t.Fatalf("active session was affected: %v", err)
 	}
 }
 

@@ -145,6 +145,29 @@ func TestArchiveRemovesRetainedMedia(t *testing.T) {
 	}
 }
 
+func TestDeleteArchivedSessionRemovesRetainedMedia(t *testing.T) {
+	h := newHarness(t, harnessOpts{})
+	id := newSession(t, h, 1, aliceChat, aliceID, "old")
+	h.text(msg(2, aliceChat, aliceID, "/archive "+id))
+	dir := filepath.Join(h.ws, ".codex-telegram-media-delete-test")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "attachment.bin")
+	if err := os.WriteFile(path, []byte("private attachment"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.st.AddRetainedMedia(context.Background(), id, aliceID, path, "document"); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.text(msg(3, aliceChat, aliceID, "/delete "+id)); !strings.Contains(got, "Deleted archived session "+id) {
+		t.Fatalf("delete replied %q", got)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("delete left retained media directory: %v", err)
+	}
+}
+
 func TestRetainedMediaSurvivesRestart(t *testing.T) {
 	h := newHarness(t, harnessOpts{spec: successSpec("seen", "seen")})
 	h.tg.SetFile("photo", []byte("image bytes"))

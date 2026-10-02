@@ -330,6 +330,8 @@ same user allowlist and private-chat rules as messages.
 | `/rename <id> <name>` | Rename one of your sessions by ID. |
 | `/archive` | Choose one of your sessions to archive with a button. |
 | `/archive <id>` | Hide and deselect a session in every chat and topic. Retained attachments are removed; Codex history is untouched. `/unarchive <id>` brings the session back. |
+| `/delete` | List your archived sessions and choose one to delete. |
+| `/delete <id>` | Permanently remove an archived session, its selections, retained attachments, and saved bot turns. Codex's own thread files remain. |
 | `/stop` | Cancel the turn running **in this chat**. The session and its thread survive. |
 | anything else | Becomes a Codex prompt. If nothing is selected, a session is created first and you are told its id. |
 
@@ -714,7 +716,7 @@ What the bot guarantees:
 - Only allowlisted numeric `from.id` values, checked before any command is
   parsed, before the database is touched for that update, and before any process
   is started. Senders that are bots are dropped.
-- A session cannot be read, renamed, archived, selected or run by another user,
+- A session cannot be read, renamed, archived, deleted, selected or run by another user,
   even with its exact id. Ownership is in the SQL, and "not yours" is
   indistinguishable from "does not exist".
 - No shell. Codex is spawned with an argv array; the prompt is one element behind
@@ -832,7 +834,7 @@ token, no real Codex account, and no Codex turn ever run:
   session, and cannot read or run somebody else's session by guessing its id.
 - Ownership and isolation at the store level: every session query filters on the
   owner, and "not yours" is indistinguishable from "does not exist".
-- Session create / list / rename / archive / unarchive, and switching with
+- Session create / list / rename / archive / unarchive / delete, and switching with
   `/use`.
 - The acceptance scenario end to end: `/new` → prompt → `exec` argv recorded and
   the thread UUID stored → second prompt → `resume <that exact UUID>` argv

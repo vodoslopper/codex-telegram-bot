@@ -56,6 +56,8 @@ func (b *Bot) handleCommand(ctx context.Context, p *Prepared) {
 		err = b.cmdArchive(ctx, p, cmd, true)
 	case "unarchive":
 		err = b.cmdArchive(ctx, p, cmd, false)
+	case "delete":
+		err = b.cmdDelete(ctx, p, cmd)
 	case "stop", "cancel":
 		b.cmdStop(ctx, p)
 		return
@@ -77,6 +79,10 @@ func commandErrorText(cmd string, err error) string {
 	case errors.Is(err, store.ErrNotFound):
 		return fmt.Sprintf("/%s: I could not find that session. It may belong to another user, "+
 			"or the id may be mistyped. /sessions lists yours.", cmd)
+	case errors.Is(err, store.ErrNotArchived):
+		return "/delete: only archived sessions can be deleted. Archive the session first."
+	case errors.Is(err, store.ErrSessionBusy):
+		return "/delete: that session has a running or queued turn. Stop it and try again."
 	case errors.Is(err, context.Canceled):
 		return fmt.Sprintf("/%s: cancelled.", cmd)
 	default:
@@ -113,6 +119,7 @@ func (b *Bot) helpText(ctx context.Context, scope Scope, greeting bool) string {
 /archive            choose a session to hide from /sessions
 /archive <id>       hide a session by id (Codex history is kept)
 /unarchive <id>     show an archived session again
+/delete [id]        choose or delete an archived session
 /stop               cancel the turn running in this chat
 /help               this message
 
@@ -438,15 +445,13 @@ func (b *Bot) cmdArchive(ctx context.Context, p *Prepared, cmd *Command, archive
 	if err != nil {
 		return err
 	}
-	if archive {
-		waitCtx, cancel := context.WithTimeout(ctx, b.cfg.QueueTimeout)
-		defer cancel()
-		release, err := b.wsLocks.Acquire(waitCtx, workspaceKey(sess.Workspace))
-		if err != nil {
-			return fmt.Errorf("workspace is busy; retry /archive after the active turn finishes: %w", err)
-		}
-		defer release()
+	waitCtx, cancel := context.WithTimeout(ctx, b.cfg.QueueTimeout)
+	defer cancel()
+	release, err := b.wsLocks.Acquire(waitCtx, workspaceKey(sess.Workspace))
+	if err != nil {
+		return fmt.Errorf("workspace is busy; retry /%s after the active turn finishes: %w", verb, err)
 	}
+	defer release()
 	if err := b.st.SetArchived(ctx, id, p.Scope.UserID, archive); err != nil {
 		return err
 	}
@@ -483,6 +488,94 @@ func (b *Bot) cmdArchive(ctx context.Context, p *Prepared, cmd *Command, archive
 	} else {
 		b.sendBest(ctx, p.Scope, fmt.Sprintf("Unarchived %s.", id))
 	}
+	return nil
+}
+
+// cmdDelete removes a bot-owned session only after it has been archived.
+// Deleting the session cascades its selections and saved turn records; Codex's
+// own thread files are managed separately by Codex and are left alone.
+func (b *Bot) cmdDelete(ctx context.Context, p *Prepared, cmd *Command) error {
+	if len(cmd.Args) == 0 {
+		sessions, err := b.st.ListSessions(ctx, p.Scope.UserID, true)
+		if err != nil {
+			return err
+		}
+		archived := make([]store.Session, 0, len(sessions))
+		for _, sess := range sessions {
+			if sess.Archived {
+				archived = append(archived, sess)
+			}
+		}
+		if len(archived) == 0 {
+			b.sendBest(ctx, p.Scope, "You have no archived sessions to delete. /archive lists sessions you can archive.")
+			return nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Archived sessions (%d):\n", len(archived))
+		for _, sess := range archived {
+			fmt.Fprintf(&sb, "  %s  %s\n", sess.ID, sessionSummaryLine(sess))
+		}
+		sb.WriteString("\nTap a session to delete it, or send /delete <id>. " +
+			"This permanently removes the bot's session and saved turns. Codex's own thread files remain.")
+		if len(archived) > maxSessionButtons {
+			fmt.Fprintf(&sb, " Buttons show the %d most recent archived sessions; use /delete <id> for the rest.", maxSessionButtons)
+		}
+		b.sendBestWithKeyboard(ctx, p.Scope, sb.String(), deleteKeyboard(archived))
+		return nil
+	}
+	id, err := sessionArg(cmd, "delete")
+	if err != nil {
+		b.sendBest(ctx, p.Scope, err.Error())
+		return nil
+	}
+	sess, err := b.st.GetSession(ctx, id, p.Scope.UserID)
+	if err != nil {
+		return err
+	}
+	if !sess.Archived {
+		return store.ErrNotArchived
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, b.cfg.QueueTimeout)
+	defer cancel()
+	release, err := b.wsLocks.Acquire(waitCtx, workspaceKey(sess.Workspace))
+	if err != nil {
+		return fmt.Errorf("workspace is busy; retry /delete after the active turn finishes: %w", err)
+	}
+	defer release()
+	sess, err = b.st.GetSession(ctx, id, p.Scope.UserID)
+	if err != nil {
+		return err
+	}
+	if !sess.Archived {
+		return store.ErrNotArchived
+	}
+	if running, err := b.st.HasRunningTurn(ctx, id); err != nil {
+		return err
+	} else if running {
+		return store.ErrSessionBusy
+	}
+	media, err := b.st.RetainedMedia(ctx, id, p.Scope.UserID)
+	if err != nil {
+		return err
+	}
+	for _, m := range media {
+		if err := removeMediaDirectory(sess.Workspace, m.Path); err != nil {
+			return fmt.Errorf("remove retained attachment before deleting session: %w", err)
+		}
+	}
+	if err := b.st.DeleteArchivedSession(ctx, id, p.Scope.UserID); err != nil {
+		return err
+	}
+	text := fmt.Sprintf("Deleted archived session %s and its saved turns. Codex's own thread files remain.", id)
+	if p.CallbackID != "" && p.CallbackMessageID > 0 {
+		if err := b.tg.EditMessageText(ctx, p.Scope.ChatID, p.CallbackMessageID, text,
+			&telegram.InlineKeyboard{}); err == nil || telegram.IsMessageNotModified(err) {
+			return nil
+		} else {
+			b.log.Warn("could not update the delete button message", "error", err.Error())
+		}
+	}
+	b.sendBest(ctx, p.Scope, text)
 	return nil
 }
 
