@@ -36,6 +36,7 @@ Telegram ──getUpdates──> bot ──exec.CommandContext──> codex exec
 - [Configuration](#configuration)
 - [Using the bot](#using-the-bot)
 - [The exact Codex command lines](#the-exact-codex-command-lines)
+- [Application web retrieval](#application-web-retrieval)
 - [How it works](#how-it-works)
 - [Deliberate implementation choices](#deliberate-implementation-choices)
 - [Security model](#security-model)
@@ -526,6 +527,43 @@ turn. Error events are collected as diagnostics; the verdict comes from
 `turn.completed` / `turn.failed` and the exit status.
 
 ---
+
+## Application web retrieval
+
+For `workspace-write` turns, the application supplies a per-turn file bridge for
+public HTTP(S) retrieval. The agent writes a JSON request in the workspace; the
+bot process performs the network request and writes a bounded JSON response.
+This works when the Codex shell has no network access and does not use a web
+MCP server. `read-only` turns cannot write bridge requests and do not receive
+this capability. The bot itself must have network access.
+
+HTTP is tried first. Recognized Anubis and similar challenge pages trigger
+`chromium-headless-shell`, which must be installed on the service's `PATH`.
+Each browser attempt uses an ephemeral profile and a public-address-only proxy
+with a shared download budget. Chromium's sandbox stays enabled. A missing
+browser, remaining challenge, empty page, or missing `expect` text produces an
+explicit error instead of returning the challenge as requested content.
+
+Requests accept `url`, `start`/`end` (1-based inclusive lines), `tail`, `search`
+(literal text), and `expect` (literal text required in the downloaded content).
+Downloads are bounded at 16 MiB and output at 64 KiB, with explicit truncation
+flags. A tail is refused if the complete log could not be downloaded. Searches
+of a truncated download cover only that prefix. These operations work for public
+websites and logs generally.
+
+Every turn replaces `skills/web-access-barriers/SKILL.md` in the dedicated
+`CODEX_HOME` with the bundled [retrieval skill](internal/webretrieve/skills/web-access-barriers/SKILL.md).
+No MCP server is required for retrieval.
+
+For an opt-in network check, set `BOT_WEB_TEST_URL` to a public text log and
+`BOT_WEB_TEST_EXPECT` to a literal from its content, then run
+`BOT_WEB_LIVE_TEST=1 go test -v ./internal/webretrieve -run TestHTTPLive`.
+Use `BOT_WEB_BROWSER_TEST=1` with `-run TestBrowserLive` to check the real
+headless shell, and `BOT_WEB_ISOLATION_TEST=1` with
+`-run TestNetworkIsolatedBridge` to prove retrieval works from a child network
+namespace without HTTP access (Linux with `unshare` available).
+`BOT_WEB_CHALLENGE_TEST=1` with `-run TestChallengeLive` checks actual challenge
+fallback using `BOT_WEB_CHALLENGE_URL` and `BOT_WEB_CHALLENGE_EXPECT`.
 
 ## How it works
 

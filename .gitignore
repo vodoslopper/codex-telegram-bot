@@ -23,3 +23,4 @@ bot.env
 .vscode/
 __pycache__/
 *.pyc
+.bot-web-*/

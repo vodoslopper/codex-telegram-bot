@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"codex-telegram-bot/internal/webretrieve"
 )
 
 // Errors reported by Run. Callers map these to user-visible text; the distinction
@@ -144,6 +146,20 @@ func (r *Runner) Sandbox() string { return r.cfg.Sandbox }
 // SIGTERM, and SIGKILL KillGrace later if it is still alive, so the shells and
 // build processes Codex started do not outlive the turn.
 func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
+	if err := req.validate(); err != nil {
+		return nil, err
+	}
+	if err := webretrieve.InstallSkill(r.cfg.CodexHome); err != nil {
+		return nil, fmt.Errorf("install web retrieval skill: %w", err)
+	}
+	if r.cfg.Sandbox == SandboxWorkspaceWrite {
+		instruction, cleanup, err := webretrieve.StartBridge(ctx, r.cfg.Workspace)
+		if err != nil {
+			return nil, fmt.Errorf("web retrieval bridge: %w", err)
+		}
+		defer cleanup()
+		req.Prompt += instruction
+	}
 	argv, err := r.Argv(req)
 	if err != nil {
 		return nil, err

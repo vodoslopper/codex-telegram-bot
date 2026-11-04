@@ -83,6 +83,10 @@ func TestRunSucceeds(t *testing.T) {
 
 	// The recorded command line is the one the runner claims to build.
 	got := fake.Argv(t, 1)
+	if !strings.Contains(got[len(got)-1], "Application web retrieval") {
+		t.Fatal("missing application retrieval capability")
+	}
+	got[len(got)-1] = strings.SplitN(got[len(got)-1], "\nApplication web retrieval", 2)[0]
 	want := []string{
 		"exec", "--json", "--strict-config", "--sandbox", "workspace-write",
 		"--", "Summarize this repository",
@@ -111,6 +115,10 @@ func TestResumeRunsInTheSameDirectory(t *testing.T) {
 		t.Errorf("the resumed turn ran in %q, want the same workspace %q", cwd, ws)
 	}
 	got := fake.Argv(t, 1)
+	if !strings.Contains(got[len(got)-1], "Application web retrieval") {
+		t.Fatal("missing application retrieval capability")
+	}
+	got[len(got)-1] = strings.SplitN(got[len(got)-1], "\nApplication web retrieval", 2)[0]
 	want := []string{
 		"exec", "resume", testThread, "--json", "--strict-config",
 		"-c", `sandbox_mode="workspace-write"`, "--", "Now inspect the spec file",

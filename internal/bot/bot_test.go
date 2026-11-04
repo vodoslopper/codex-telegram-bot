@@ -112,7 +112,7 @@ func TestAcceptanceScenario(t *testing.T) {
 	}
 	wantArgv := []string{"exec", "--json", "--strict-config", "--sandbox", "workspace-write",
 		"-m", "gpt-6-sol", "--", "Summarize this repository" + fileHandoffInstruction}
-	if got := h.fake.Argv(t, 1); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
+	if got := h.fake.Argv(t, 1); strings.Join(withoutRetrievalInstruction(got), "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("the first turn ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
 	sess, err := h.st.GetSession(context.Background(), id, aliceID)
@@ -134,7 +134,7 @@ func TestAcceptanceScenario(t *testing.T) {
 	}
 	wantArgv = []string{"exec", "resume", threadOne, "--json", "--strict-config",
 		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "Now inspect the spec file" + fileHandoffInstruction}
-	if got := h.fake.Argv(t, 2); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
+	if got := h.fake.Argv(t, 2); strings.Join(withoutRetrievalInstruction(got), "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("the resumed turn ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
 	if n := len(h.fake.Invocations(t)); n != 2 {
@@ -179,7 +179,7 @@ func TestAcceptanceScenario(t *testing.T) {
 	}
 	wantArgv = []string{"exec", "resume", threadOne, "--json", "--strict-config",
 		"-c", `sandbox_mode="workspace-write"`, "-m", "gpt-6-sol", "--", "What did we discuss?" + fileHandoffInstruction}
-	if got := restarted.fake.Argv(t, 3); strings.Join(got, "\x00") != strings.Join(wantArgv, "\x00") {
+	if got := restarted.fake.Argv(t, 3); strings.Join(withoutRetrievalInstruction(got), "\x00") != strings.Join(wantArgv, "\x00") {
 		t.Errorf("after a restart codex ran\n  %q\nwant\n  %q", got, wantArgv)
 	}
 
@@ -1489,4 +1489,10 @@ func TestAuthFailureIsExplained(t *testing.T) {
 	if !strings.Contains(reply, "login --device-auth") {
 		t.Errorf("an unauthenticated Codex was not explained with the fix:\n%s", reply)
 	}
+}
+
+func withoutRetrievalInstruction(argv []string) []string {
+	out := append([]string(nil), argv...)
+	out[len(out)-1] = strings.SplitN(out[len(out)-1], "\nApplication web retrieval", 2)[0]
+	return out
 }
