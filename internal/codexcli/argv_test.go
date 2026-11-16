@@ -206,16 +206,16 @@ func TestArgvReadOnlySandbox(t *testing.T) {
 	}
 }
 
-func TestNewRunnerRejectsDangerFullAccess(t *testing.T) {
-	_, err := NewRunner(Config{
-		Bin: "/usr/bin/codex", Workspace: "/w", CodexHome: "/h",
-		Sandbox: "danger-full-access",
-	}, nil)
-	if err == nil {
-		t.Fatal("NewRunner accepted danger-full-access")
+func TestNewRunnerAcceptsDangerFullAccess(t *testing.T) {
+	r := testRunner(t, func(c *Config) { c.Sandbox = "danger-full-access" })
+	got := r.mustArgv(t, Request{Prompt: "x"})
+	i := slices.Index(got, "--sandbox")
+	if i < 0 || i+1 >= len(got) || got[i+1] != "danger-full-access" {
+		t.Errorf("argv = %q, want --sandbox danger-full-access", got)
 	}
-	if !strings.Contains(err.Error(), "refused on purpose") {
-		t.Errorf("the error should say the refusal is deliberate: %v", err)
+	resume := r.mustArgv(t, Request{ThreadID: "0199a213-81c0-7800-8aa1-bbab2a035a53", Prompt: "x"})
+	if !slices.Contains(resume, `sandbox_mode="danger-full-access"`) {
+		t.Errorf("resume argv = %q, want the full-access config override", resume)
 	}
 }
 

@@ -71,6 +71,7 @@ RestartSec=5s
 # Codex's own sandbox (workspace-write) is the control that scopes what the agent
 # may change; these settings are the cheap ones that cannot break it.
 NoNewPrivileges=yes
+LimitCORE=0
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

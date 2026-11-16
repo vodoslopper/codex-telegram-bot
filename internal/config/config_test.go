@@ -197,15 +197,15 @@ func TestLoadRejectsCodexHomeInsideTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsDangerFullAccess(t *testing.T) {
+func TestLoadAcceptsDangerFullAccess(t *testing.T) {
 	env := withValidToken(baseEnv(t))
 	env["BOT_SANDBOX_MODE"] = "danger-full-access"
-	_, err := Load(env)
-	if err == nil {
-		t.Fatal("Load accepted danger-full-access")
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "rejected on purpose") {
-		t.Errorf("the error should say the mode is refused deliberately: %v", err)
+	if cfg.SandboxMode != "danger-full-access" {
+		t.Fatalf("unexpected sandbox: %s", cfg.SandboxMode)
 	}
 }
 

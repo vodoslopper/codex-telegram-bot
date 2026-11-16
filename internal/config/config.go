@@ -53,14 +53,8 @@ const (
 	MaxTelegramMessageLen = textsplit.MaxText
 )
 
-// Sandbox modes the bot is willing to run Codex with.
-//
-// danger-full-access is not in this list on purpose and Load rejects it even
-// though the Codex CLI accepts it: a Telegram message that reaches an unsandboxed
-// agent on the host is not a trade this bot makes. Use read-only for a bot that
-// should only answer questions, workspace-write for one that may edit the
-// configured repository.
-var allowedSandboxModes = []string{"read-only", "workspace-write"}
+// Supported Codex sandbox modes. Full access must be explicitly configured.
+var allowedSandboxModes = []string{"read-only", "workspace-write", "danger-full-access"}
 
 // Config is the validated process configuration.
 type Config struct {
@@ -207,7 +201,7 @@ func Load(env map[string]string) (*Config, error) {
 	}
 
 	if v := get("BOT_SANDBOX_MODE"); v != "" && !slices.Contains(allowedSandboxModes, cfg.SandboxMode) {
-		fail("BOT_SANDBOX_MODE=%q is not allowed; use one of %s (danger-full-access is rejected on purpose)",
+		fail("BOT_SANDBOX_MODE=%q is not allowed; use one of %s",
 			v, strings.Join(allowedSandboxModes, ", "))
 	}
 	if d, ok, err := parseDuration(get("BOT_TURN_TIMEOUT")); err != nil {

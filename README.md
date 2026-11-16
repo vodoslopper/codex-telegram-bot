@@ -260,7 +260,7 @@ a container, or a shell, and no secret ever appears on a command line.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BOT_SANDBOX_MODE` | `workspace-write` | `workspace-write` or `read-only`. `danger-full-access` is refused outright. |
+| `BOT_SANDBOX_MODE` | `workspace-write` | `workspace-write`, `read-only`, or explicit `danger-full-access` (commands run with the service account permissions). |
 | `BOT_CODEX_MODEL` | `gpt-6-sol` | Baseline model; `gpt-6-sol` or `gpt-6-luna`. Passed as `-m`. |
 | `BOT_CODEX_STRICT_CONFIG` | `true` | Pass `--strict-config`. |
 | `BOT_CHECK_CODEX_LOGIN` | `true` | Probe `codex login status` at startup and warn. |
@@ -293,7 +293,6 @@ in one message:
 - `CODEX_HOME` is your interactive `~/.codex`.
 - `BOT_CODEX_BIN` does not exist, is a directory, is not executable, or does not
   run (`codex --version` is executed once at startup and the version logged).
-- `BOT_SANDBOX_MODE=danger-full-access`.
 - A webhook cannot be removed *and* the token was rejected (401 is fatal; a
   network failure is not — the poller retries).
 
@@ -720,10 +719,18 @@ buys the guarantee that the sandbox override was actually understood rather than
 silently dropped. Silence in the wrong direction here means an unintended
 sandbox.
 
-**`danger-full-access` is not configurable.** The string is rejected by
-`config.Load` and again by `codexcli.NewRunner`. A Telegram message reaching an
-unsandboxed agent on your host is not a trade this bot makes; use a container if
-you need that.
+**Use `workspace-write` for new installations (the default).** Keep the shipped
+systemd protections enabled. Choose `read-only` when the bot should only inspect
+files. All setup examples use the sandboxed default.
+
+**Full access is an explicit administrator opt-in for an individual installation.**
+Setting `BOT_SANDBOX_MODE=danger-full-access` in that installation's private
+`bot.env` disables the Codex sandbox, including bubblewrap mounts and shell
+network isolation. Commands have the service account permissions. Restart the
+service after changing the setting. Do not put this value in shared defaults or
+the shipped service unit. Any service protection overrides must also be local;
+retain `NoNewPrivileges=yes`, `LimitCORE=0`, and `UMask=0077` where compatible.
+Full access does not grant root privileges.
 
 **A webhook is deleted, pending updates are not.** `deleteWebhook` is called with
 `drop_pending_updates=false`, so messages sent while the bot was down still
@@ -744,7 +751,9 @@ the unit file too.
 Read this before adding anybody to the allowlist.
 
 **A person who can prompt this bot can change files in `BOT_WORKSPACE`, as the
-service account, within the Codex sandbox.** That is the entire point of it, and
+service account, within the configured Codex sandbox. With full access enabled,
+they can also change files outside the workspace wherever that account has
+permission.** That is the entire point of it, and
 it is why the allowlist should be one or two ids. Prompt injection applies: a
 repository the agent reads can contain instructions that try to steer it.
 
@@ -759,8 +768,7 @@ What the bot guarantees:
   indistinguishable from "does not exist".
 - No shell. Codex is spawned with an argv array; the prompt is one element behind
   `--`.
-- `workspace-write` at most. No approval bypass, no `danger-full-access`, no
-  `--skip-git-repo-check`.
+- `workspace-write` by default; full access requires explicit configuration.
 - The bot token and the allowlist never reach the Codex child process, the log, or
   a Telegram message. The log handler additionally masks any attribute named
   `token`, `secret`, `api_key`, `password` or `authorization`, so a future call

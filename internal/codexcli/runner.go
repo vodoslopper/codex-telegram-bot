@@ -49,7 +49,7 @@ type Config struct {
 	Workspace string
 	// CodexHome is the dedicated CODEX_HOME for the child process.
 	CodexHome string
-	// Sandbox is "workspace-write" or "read-only".
+	// Sandbox is "workspace-write", "read-only", or explicit "danger-full-access".
 	Sandbox string
 	// Model is an optional -m value.
 	Model string
@@ -127,9 +127,9 @@ func NewRunner(cfg Config, log *slog.Logger) (*Runner, error) {
 		return nil, errors.New("codexcli: CodexHome is required")
 	}
 	switch cfg.Sandbox {
-	case SandboxReadOnly, SandboxWorkspaceWrite:
+	case SandboxReadOnly, SandboxWorkspaceWrite, "danger-full-access":
 	default:
-		return nil, fmt.Errorf("codexcli: sandbox %q is not supported (danger-full-access is refused on purpose)", cfg.Sandbox)
+		return nil, fmt.Errorf("codexcli: sandbox %q is not supported", cfg.Sandbox)
 	}
 	if log == nil {
 		log = slog.Default()
