@@ -363,8 +363,10 @@ When Codex creates a file for the user, it includes a
 uploads each named file as a Telegram document, then sends the answer without
 those lines. Documents preserve exact bytes, including PNG transparency. Up to
 five nonempty files of at most 50 MB each can be sent per turn. Files must be in
-the configured workspace and created or modified during that turn; links out of
-the workspace and files under `.git` are rejected. Files remain in the workspace
+the configured workspace. An older file can be resent if its path and SHA-256
+match a document previously uploaded in the same session. Otherwise, the file
+must have been created or modified during the current turn. Links out of the
+workspace and files under `.git` are rejected. Files remain in the workspace
 after delivery. If an upload fails, the bot retries the stored answer while the
 file remains available. Invalid file references are skipped with a note in the
 text answer; they are not retried indefinitely.

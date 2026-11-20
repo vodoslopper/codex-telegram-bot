@@ -368,7 +368,7 @@ func (b *Bot) retryPendingReplies(ctx context.Context) {
 			}
 			body = label + ":\n\n" + body
 		}
-		err := b.deliverReply(sendCtx, scope, body, reply.StartedAt)
+		err := b.deliverReply(sendCtx, scope, reply.SessionID, body, reply.StartedAt)
 		if err == nil {
 			err = b.st.MarkTurnDelivered(sendCtx, reply.TurnID)
 		}

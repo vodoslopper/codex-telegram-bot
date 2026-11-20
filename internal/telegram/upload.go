@@ -9,25 +9,15 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 )
 
 // SendDocument uploads a local file as a Telegram document, preserving formats
 // such as transparent PNGs without photo conversion.
-func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, path string) (*SentMessage, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("telegram: open document: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("telegram: stat document: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 50<<20 {
-		return nil, errors.New("telegram: document must be a nonempty regular file no larger than 50 MB")
+func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, name string, data []byte) (*SentMessage, error) {
+	if len(data) == 0 || len(data) > 50<<20 {
+		return nil, errors.New("telegram: document must be nonempty and no larger than 50 MB")
 	}
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -39,11 +29,11 @@ func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, path 
 			return nil, err
 		}
 	}
-	part, err := mw.CreateFormFile("document", filepath.Base(path))
+	part, err := mw.CreateFormFile("document", filepath.Base(name))
 	if err != nil {
 		return nil, err
 	}
-	if _, err := io.CopyN(part, file, info.Size()); err != nil {
+	if _, err := part.Write(data); err != nil {
 		return nil, fmt.Errorf("telegram: read document: %w", err)
 	}
 	if err := mw.Close(); err != nil {

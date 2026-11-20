@@ -45,7 +45,7 @@ type Telegram interface {
 	EditMessageText(ctx context.Context, chatID, messageID int64, text string, keyboard *telegram.InlineKeyboard) error
 	AnswerCallbackQuery(ctx context.Context, id, text string) error
 	SetMyCommands(ctx context.Context, commands []telegram.BotCommand) error
-	SendDocument(ctx context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error)
+	SendDocument(ctx context.Context, chatID, threadID int64, name string, data []byte) (*telegram.SentMessage, error)
 	DownloadFile(ctx context.Context, fileID string) ([]byte, error)
 	SendChatAction(ctx context.Context, chatID, threadID int64, action string) error
 	GetUpdates(ctx context.Context, offset int64, pollTimeout time.Duration, limit int) ([]telegram.Update, error)
@@ -79,6 +79,8 @@ type Store interface {
 	SelectedSession(ctx context.Context, chatID, threadID, userID int64) (store.Session, error)
 	ModelSetting(ctx context.Context, userID, chatID, threadID int64) (string, error)
 	SetModelSetting(ctx context.Context, userID, chatID, threadID int64, model string) error
+	RecordSentDocument(ctx context.Context, sessionID, path string, digest []byte) error
+	WasDocumentSent(ctx context.Context, sessionID, path string, digest []byte) (bool, error)
 	AddRetainedMedia(ctx context.Context, sessionID string, ownerUserID int64, path, kind string) error
 	RetainedMedia(ctx context.Context, sessionID string, ownerUserID int64) ([]store.RetainedMedia, error)
 	IncrementMediaUnrelated(ctx context.Context, id, ownerUserID int64) (bool, error)
@@ -439,7 +441,7 @@ func (b *Bot) recoverUndelivered(ctx context.Context, p *Prepared) {
 	}
 	b.log.Warn("redelivering a reply whose delivery was never confirmed",
 		"update_id", p.UpdateID, "turn_id", t.ID, "session_id", t.SessionID)
-	if err := b.deliverReply(ctx, p.Scope, t.Reply, t.StartedAt); err != nil {
+	if err := b.deliverReply(ctx, p.Scope, t.SessionID, t.Reply, t.StartedAt); err != nil {
 		b.log.Error("redelivery failed", "update_id", p.UpdateID, "error", err.Error())
 		return
 	}

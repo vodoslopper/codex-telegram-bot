@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -38,11 +36,7 @@ func TestSendDocumentMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "transparent.png")
-	if err := os.WriteFile(path, []byte("png content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sent, err := c.SendDocument(context.Background(), 111, 42, path)
+	sent, err := c.SendDocument(context.Background(), 111, 42, "transparent.png", []byte("png content"))
 	if err != nil || sent.MessageID != 123 {
 		t.Fatalf("SendDocument = %+v, %v", sent, err)
 	}

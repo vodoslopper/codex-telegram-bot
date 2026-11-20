@@ -84,3 +84,16 @@ func (s *Store) DeleteRetainedMedia(ctx context.Context, id, ownerUserID int64) 
 	}
 	return nil
 }
+
+func (s *Store) RecordSentDocument(ctx context.Context, sessionID, path string, digest []byte) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sent_documents(session_id, path, sha256)
+		VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, sessionID, path, digest)
+	return err
+}
+
+func (s *Store) WasDocumentSent(ctx context.Context, sessionID, path string, digest []byte) (bool, error) {
+	var sent bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sent_documents
+		WHERE session_id = ? AND path = ? AND sha256 = ?)`, sessionID, path, digest).Scan(&sent)
+	return sent, err
+}

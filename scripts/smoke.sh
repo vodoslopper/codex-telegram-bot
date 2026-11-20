@@ -152,9 +152,20 @@ say "checking the Codex invocation"
 n="$(cat "$artifacts/count" 2>/dev/null || echo 0)"
 [[ "$n" == "1" ]] || die "codex was invoked $n time(s), want 1"
 tr '\0' '\n' < "$artifacts/argv.1"
-expected=$'exec\n--json\n--strict-config\n--sandbox\nworkspace-write\n-m\ngpt-6-sol\n--\nSummarize this repository\n\nIf you create a file that the user should receive in Telegram, include a separate line in your final answer for each file in this exact form: [[telegram-file:/absolute/path/to/file]]. Create the file inside the current workspace. Do not claim a file is attached unless you include this line.'
-got="$(tr '\0' '\n' < "$artifacts/argv.1")"
-[[ "$got" == "$expected" ]] || die "unexpected argv:\n$got"
+expected=$'exec\n--json\n--strict-config\n--sandbox\nworkspace-write\n-m\ngpt-6-sol\n--\nSummarize this repository\n\nIf you create a file that the user should receive in Telegram, include a separate line in your final answer for each file in this exact form: [[telegram-file:/absolute/path/to/file]]. Create the file inside the current workspace. Do not claim a file is attached unless you include this line. For a resend, include the marker for the unchanged file previously sent in this session.'
+python3 - "$artifacts/argv.1" "$expected" <<'PY'
+import pathlib
+import sys
+
+argv = pathlib.Path(sys.argv[1]).read_bytes().decode().removesuffix("\0").split("\0")
+flags, prompt = sys.argv[2].split("\n--\n", 1)
+want = flags.splitlines() + ["--"]
+if argv[:-1] != want:
+    sys.exit(f"unexpected flags: {argv[:-1]!r}")
+base, boundary, bridge = argv[-1].partition("\nApplication web retrieval")
+if base != prompt or not boundary or "request.json" not in bridge:
+    sys.exit(f"unexpected prompt: {argv[-1]!r}")
+PY
 cwd="$(cat "$artifacts/cwd.1")"
 [[ "$cwd" == "$ws" ]] || die "codex ran in $cwd, want $ws"
 if grep -q 'TELEGRAM_BOT_TOKEN' "$artifacts/env.1"; then

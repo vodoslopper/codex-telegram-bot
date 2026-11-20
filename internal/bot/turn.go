@@ -374,7 +374,7 @@ func (b *Bot) finish(ctx context.Context, p *Prepared, sess store.Session, turnI
 	}
 	var err error
 	if out.status == store.TurnCompleted {
-		err = b.deliverReply(ctx, p.Scope, text, out.startedAt)
+		err = b.deliverReply(ctx, p.Scope, sess.ID, text, out.startedAt)
 	} else {
 		err = b.send(ctx, p.Scope, text)
 	}

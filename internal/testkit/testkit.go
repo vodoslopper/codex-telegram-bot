@@ -657,18 +657,14 @@ func (f *FakeTelegram) SetMyCommands(_ context.Context, commands []telegram.BotC
 	return nil
 }
 
-func (f *FakeTelegram) SendDocument(_ context.Context, chatID, threadID int64, path string) (*telegram.SentMessage, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+func (f *FakeTelegram) SendDocument(_ context.Context, chatID, threadID int64, name string, data []byte) (*telegram.SentMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}
 	f.nextID++
-	f.sent = append(f.sent, Sent{MessageID: f.nextID, ChatID: chatID, ThreadID: threadID, Document: filepath.Base(path), Data: data})
+	f.sent = append(f.sent, Sent{MessageID: f.nextID, ChatID: chatID, ThreadID: threadID, Document: name, Data: data})
 	return &telegram.SentMessage{MessageID: f.nextID}, nil
 }
 
