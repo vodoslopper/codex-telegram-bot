@@ -29,7 +29,9 @@ import (
 const (
 	DefaultTelegramAPIBase = "https://api.telegram.org"
 	DefaultSandboxMode     = "workspace-write"
-	DefaultModel           = "gpt-6-sol"
+	SolModel               = "gpt-6.2-sol"
+	LunaModel              = "gpt-6-luna"
+	DefaultModel           = SolModel
 	DefaultTurnTimeout     = 15 * time.Minute
 	DefaultAckAfter        = 10 * time.Second
 	DefaultTypingInterval  = 4 * time.Second
@@ -196,8 +198,11 @@ func Load(env map[string]string) (*Config, error) {
 	}
 
 	// --- optional knobs ----------------------------------------------------
-	if cfg.Model != "gpt-6-luna" && cfg.Model != "gpt-6-sol" {
-		fail("BOT_CODEX_MODEL=%q is not supported; use gpt-6-luna or gpt-6-sol", cfg.Model)
+	if cfg.Model == "gpt-6-sol" {
+		cfg.Model = SolModel // Baseline configured before the Sol upgrade.
+	}
+	if cfg.Model != LunaModel && cfg.Model != SolModel {
+		fail("BOT_CODEX_MODEL=%q is not supported; use %s or %s", cfg.Model, LunaModel, SolModel)
 	}
 
 	if v := get("BOT_SANDBOX_MODE"); v != "" && !slices.Contains(allowedSandboxModes, cfg.SandboxMode) {

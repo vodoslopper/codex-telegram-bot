@@ -261,7 +261,7 @@ a container, or a shell, and no secret ever appears on a command line.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BOT_SANDBOX_MODE` | `workspace-write` | `workspace-write`, `read-only`, or explicit `danger-full-access` (commands run with the service account permissions). |
-| `BOT_CODEX_MODEL` | `gpt-6-sol` | Baseline model; `gpt-6-sol` or `gpt-6-luna`. Passed as `-m`. |
+| `BOT_CODEX_MODEL` | `gpt-6.2-sol` | Baseline model; `gpt-6.2-sol` or `gpt-6-luna`. Passed as `-m`. |
 | `BOT_CODEX_STRICT_CONFIG` | `true` | Pass `--strict-config`. |
 | `BOT_CHECK_CODEX_LOGIN` | `true` | Probe `codex login status` at startup and warn. |
 | `BOT_TURN_TIMEOUT` | `15m` | Per-turn deadline, 30s..24h. |
@@ -415,7 +415,7 @@ on Linux. `internal/codexcli/argv_test.go` pins them, so a change fails a test.
 **First turn of a session** (no stored thread id):
 
 ```
-codex exec --json --strict-config --sandbox workspace-write -m gpt-6-sol -- <PROMPT>
+codex exec --json --strict-config --sandbox workspace-write -m gpt-6.2-sol -- <PROMPT>
 ```
 
 with the effective model flag inserted before `--`:
@@ -427,7 +427,7 @@ codex exec --json --strict-config --sandbox workspace-write -m <MODEL> -- <PROMP
 **Every later turn of that session** (resuming the exact stored UUID):
 
 ```
-codex exec resume <STORED_THREAD_UUID> --json --strict-config -c sandbox_mode="workspace-write" -m gpt-6-sol -- <PROMPT>
+codex exec resume <STORED_THREAD_UUID> --json --strict-config -c sandbox_mode="workspace-write" -m gpt-6.2-sol -- <PROMPT>
 ```
 
 Both run with the child process's working directory set to `BOT_WORKSPACE`,

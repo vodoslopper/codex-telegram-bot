@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"strings"
 
+	"codex-telegram-bot/internal/config"
 	"codex-telegram-bot/internal/telegram"
 )
 
 func modelName(value string) string {
 	switch strings.ToLower(value) {
-	case "luna", "gpt-6-luna":
-		return "gpt-6-luna"
-	case "sol", "gpt-6-sol":
-		return "gpt-6-sol"
+	case "luna", config.LunaModel:
+		return config.LunaModel
+	case "sol", "gpt-6-sol", config.SolModel:
+		return config.SolModel
 	default:
 		return ""
 	}

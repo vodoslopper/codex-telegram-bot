@@ -212,7 +212,7 @@ func TestModelButtonsRespectTopicAndDefaultScope(t *testing.T) {
 	defaultChoice := buttonUpdate(3, aliceChat, 17, aliceID, "model:default:sol")
 	defaultChoice.CallbackQuery.Message.MessageID = panel.MessageID
 	h.text(defaultChoice)
-	if got, _ := h.st.ModelSetting(context.Background(), aliceID, 0, 0); got != "gpt-6-sol" {
+	if got, _ := h.st.ModelSetting(context.Background(), aliceID, 0, 0); got != "gpt-6.2-sol" {
 		t.Fatalf("default model = %q", got)
 	}
 	if got, _ := h.st.ModelSetting(context.Background(), aliceID, aliceChat, 17); got != "gpt-6-luna" {

@@ -81,6 +81,18 @@ func TestLoadAcceptsAValidEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadUpgradesLegacySolBaseline(t *testing.T) {
+	env := withValidToken(baseEnv(t))
+	env["BOT_CODEX_MODEL"] = "gpt-6-sol"
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "gpt-6.2-sol" {
+		t.Fatalf("legacy baseline resolved to %q", cfg.Model)
+	}
+}
+
 func TestLoadRejectsUnsupportedModel(t *testing.T) {
 	env := withValidToken(baseEnv(t))
 	env["BOT_CODEX_MODEL"] = "gpt-6-astra"

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"codex-telegram-bot/internal/config"
 )
 
 // ModelSetting returns an explicit model choice, or empty when this scope inherits.
@@ -19,6 +21,11 @@ func (s *Store) ModelSetting(ctx context.Context, userID, chatID, threadID int64
 	if err != nil {
 		return "", fmt.Errorf("store: get model setting: %w", err)
 	}
+	// Migration 002 stores the original model IDs as the keys for the two
+	// family choices. Keep those keys stable across CLI upgrades and rollbacks.
+	if model == "gpt-6-sol" {
+		return config.SolModel, nil
+	}
 	return model, nil
 }
 
@@ -27,7 +34,10 @@ func (s *Store) SetModelSetting(ctx context.Context, userID, chatID, threadID in
 	if userID <= 0 || chatID < 0 || threadID < 0 {
 		return errors.New("store: invalid model setting scope")
 	}
-	if model != "" && model != "gpt-6-luna" && model != "gpt-6-sol" {
+	if model == config.SolModel {
+		model = "gpt-6-sol"
+	}
+	if model != "" && model != config.LunaModel && model != "gpt-6-sol" {
 		return errors.New("store: unsupported model")
 	}
 	if model == "" {

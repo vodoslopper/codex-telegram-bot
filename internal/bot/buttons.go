@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"codex-telegram-bot/internal/config"
 	"codex-telegram-bot/internal/sessid"
 	"codex-telegram-bot/internal/store"
 	"codex-telegram-bot/internal/telegram"
@@ -67,13 +68,13 @@ func (b *Bot) modelKeyboard(ctx context.Context, scope Scope) (*telegram.InlineK
 	}
 	return &telegram.InlineKeyboard{InlineKeyboard: [][]telegram.InlineButton{
 		{
-			{Text: mark("Here: Sol", local == "gpt-6-sol"), CallbackData: "model:here:sol"},
-			{Text: mark("Here: Luna", local == "gpt-6-luna"), CallbackData: "model:here:luna"},
+			{Text: mark("Here: Sol", local == config.SolModel), CallbackData: "model:here:sol"},
+			{Text: mark("Here: Luna", local == config.LunaModel), CallbackData: "model:here:luna"},
 			{Text: mark("Here: inherit", local == ""), CallbackData: "model:here:reset"},
 		},
 		{
-			{Text: mark("Default: Sol", userDefault == "gpt-6-sol"), CallbackData: "model:default:sol"},
-			{Text: mark("Default: Luna", userDefault == "gpt-6-luna"), CallbackData: "model:default:luna"},
+			{Text: mark("Default: Sol", userDefault == config.SolModel), CallbackData: "model:default:sol"},
+			{Text: mark("Default: Luna", userDefault == config.LunaModel), CallbackData: "model:default:luna"},
 			{Text: mark("Default: reset", userDefault == ""), CallbackData: "model:default:reset"},
 		},
 	}}, nil

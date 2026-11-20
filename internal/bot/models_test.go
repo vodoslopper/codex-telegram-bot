@@ -23,7 +23,7 @@ func TestModelSettingsChooseTurnModelAndSurviveRestart(t *testing.T) {
 		t.Errorf("turn %d has no model flag: %q", n, argv)
 	}
 	h.text(msg(1, aliceChat, aliceID, "hello"))
-	expectModel(1, "gpt-6-sol")
+	expectModel(1, "gpt-6.2-sol")
 	if got := h.text(msg(2, aliceChat, aliceID, "/model default luna")); !strings.Contains(got, "gpt-6-luna") {
 		t.Fatal(got)
 	}
@@ -31,7 +31,7 @@ func TestModelSettingsChooseTurnModelAndSurviveRestart(t *testing.T) {
 	expectModel(2, "gpt-6-luna") // resumed thread
 	h.text(msg(4, aliceChat, aliceID, "/model sol"))
 	h.text(msg(5, aliceChat, aliceID, "third"))
-	expectModel(3, "gpt-6-sol")
+	expectModel(3, "gpt-6.2-sol")
 	h.text(msg(6, aliceChat, aliceID, "/model reset"))
 	h.text(msg(7, aliceChat, aliceID, "fourth"))
 	expectModel(4, "gpt-6-luna")
@@ -48,13 +48,13 @@ func TestModelSettingsTopicIsolationAndInvalidChoice(t *testing.T) {
 	h := newHarness(t, harnessOpts{spec: successSpec("ok", "ok")})
 	h.text(msg(1, aliceChat, aliceID, "/model default luna"))
 	h.text(testkit.TopicUpdate(2, aliceChat, 10, aliceID, "/model sol"))
-	if got := h.text(testkit.TopicUpdate(3, aliceChat, 10, aliceID, "/model")); !strings.Contains(got, "gpt-6-sol") {
+	if got := h.text(testkit.TopicUpdate(3, aliceChat, 10, aliceID, "/model")); !strings.Contains(got, "gpt-6.2-sol") {
 		t.Fatal(got)
 	}
 	if got := h.text(testkit.TopicUpdate(4, aliceChat, 11, aliceID, "/model")); !strings.Contains(got, "gpt-6-luna") {
 		t.Fatal(got)
 	}
-	if got := h.text(msg(5, bobChat, bobID, "/model")); !strings.Contains(got, "gpt-6-sol") {
+	if got := h.text(msg(5, bobChat, bobID, "/model")); !strings.Contains(got, "gpt-6.2-sol") {
 		t.Fatal(got)
 	}
 	if got := h.text(msg(6, aliceChat, aliceID, "/model astra")); !strings.Contains(got, "Usage:") {

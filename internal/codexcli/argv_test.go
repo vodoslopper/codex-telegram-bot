@@ -171,11 +171,11 @@ func TestArgvNoShellIsInvolved(t *testing.T) {
 }
 
 func TestArgvWithModel(t *testing.T) {
-	r := testRunner(t, func(c *Config) { c.Model = "gpt-6-sol" })
+	r := testRunner(t, func(c *Config) { c.Model = "gpt-6.2-sol" })
 	got := r.mustArgv(t, Request{Prompt: "x"})
 	i := slices.Index(got, "-m")
-	if i < 0 || got[i+1] != "gpt-6-sol" {
-		t.Errorf("argv is missing `-m gpt-6-sol`: %q", got)
+	if i < 0 || got[i+1] != "gpt-6.2-sol" {
+		t.Errorf("argv is missing `-m gpt-6.2-sol`: %q", got)
 	}
 	got = r.mustArgv(t, Request{Prompt: "x", Model: "gpt-6-luna"})
 	i = slices.Index(got, "-m")
