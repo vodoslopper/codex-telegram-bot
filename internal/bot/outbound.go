@@ -14,7 +14,7 @@ import (
 
 var fileLine = regexp.MustCompile(`^\[\[telegram-file:(/[^\r\n]+)\]\]$`)
 
-const fileHandoffInstruction = "\n\nIf you create a file that the user should receive in Telegram, include a separate line in your final answer for each file in this exact form: [[telegram-file:/absolute/path/to/file]]. Create the file inside the current workspace. Do not claim a file is attached unless you include this line. For a resend, include the marker for the unchanged file previously sent in this session."
+const fileHandoffInstruction = "\n\nIf you create a file that the user should receive in Telegram, include a separate line in your final answer for each file in this exact form: [[telegram-file:/absolute/path/to/file]]. Create the file inside the current workspace. Do not claim a file is attached unless you include this line. For a resend, include the marker for the unchanged file previously sent in this session.\n\nRespect explicit source and date limits when collecting evidence. When the user names a collection under a parent directory, try the named child directly (parent/collection). Scope every recursive listing, search and read to that child. If the location is uncertain, list only the immediate child directories to locate it. Never enumerate files in sibling collections. Attribute events to their named projects and link separate events only when the supplied evidence establishes that relationship."
 
 // deliverReply sends files explicitly named in the final answer, then its text.
 // The marker stays in the stored reply so a failed delivery can be retried.
