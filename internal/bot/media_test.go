@@ -1,10 +1,15 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -306,5 +311,160 @@ func TestMediaIsIgnoredForUnauthorizedSender(t *testing.T) {
 	h.say(u)
 	if len(h.tg.Sent()) != 0 || len(h.fake.Invocations(t)) != 0 {
 		t.Fatal("unauthorized media was handled")
+	}
+	artifacts, err := filepath.Glob(filepath.Join(h.ws, ".codex-telegram-media-*"))
+	if err != nil || len(artifacts) != 0 || len(h.sessions(t, malloryID, true)) != 0 {
+		t.Fatalf("unauthorized upload created session or media: %v, %v", artifacts, err)
+	}
+}
+
+func documentUpdate(update int64, name, caption string) telegram.Update {
+	u := msg(update, aliceChat, aliceID, "")
+	u.Message.Caption = caption
+	u.Message.Document = &telegram.MediaFile{FileID: name, FileName: name}
+	return u
+}
+
+func currentDocumentPath(t *testing.T, argv []string, want []byte) string {
+	t.Helper()
+	_, tail, ok := strings.Cut(argv[len(argv)-1], "Attached document file: ")
+	path, _, _ := strings.Cut(tail, "\n")
+	data, err := os.ReadFile(path)
+	if !ok || err != nil || !bytes.Equal(data, want) {
+		t.Fatalf("expected %d bytes of the current document at %q, got %d bytes, err=%v", len(want), path, len(data), err)
+	}
+	return path
+}
+
+func TestImageDocumentsThenXML(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("received", "received")})
+	var images []string
+	for i, name := range []string{"first.png", "second.png"} {
+		img := image.NewRGBA(image.Rect(0, 0, 2, 1))
+		img.SetRGBA(0, 0, color.RGBA{B: 255, A: 255})
+		img.SetRGBA(1, 0, img.RGBAAt(0, 0))
+		if i == 1 {
+			img.SetRGBA(1, 0, color.RGBA{R: 255, G: 255, A: 255})
+		}
+		var data bytes.Buffer
+		if err := png.Encode(&data, img); err != nil {
+			t.Fatal(err)
+		}
+		h.tg.SetFile(name, data.Bytes())
+		u := documentUpdate(int64(i+1), name, "How much blue?")
+		u.Message.Document.MimeType = "image/png"
+		h.say(u)
+		argv := h.fake.Argv(t, i+1)
+		path := currentDocumentPath(t, argv, data.Bytes())
+		n := slices.Index(argv, "-i")
+		if n < 0 || n+1 >= len(argv) || argv[n+1] != path {
+			t.Fatalf("missing current image argument: %q", argv)
+		}
+		images = append(images, path)
+	}
+	h.text(msg(3, aliceChat, aliceID, "Учитывая оба изображения, сколько синего по площади?"))
+	argv := h.fake.Argv(t, 3)
+	for _, path := range images {
+		if !strings.Contains(argv[len(argv)-1], path) {
+			t.Fatalf("combined prompt lacks image %s", path)
+		}
+	}
+	xml := []byte(`<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><book-title>Sample Book</book-title></title-info></description><body><section><p>A blue door opened.</p></section></body></FictionBook>`)
+	h.tg.SetFile("sample.xml", xml)
+	h.say(documentUpdate(4, "sample.xml", "What is its title?"))
+	argv = h.fake.Argv(t, 4)
+	book := currentDocumentPath(t, argv, xml)
+	if slices.Contains(argv, "-i") {
+		t.Fatalf("an earlier image was attached to the XML turn: %q", argv)
+	}
+	for i := 5; i <= 6; i++ {
+		h.text(msg(int64(i), aliceChat, aliceID, "Send it as an FB2 book"))
+		args := h.fake.Argv(t, i)
+		data, err := os.ReadFile(book)
+		if !strings.Contains(args[len(args)-1], book) || err != nil || !bytes.Equal(data, xml) {
+			t.Fatalf("original book unavailable at follow-up %d: %v", i, err)
+		}
+	}
+}
+
+func TestPreparationFailureAndResend(t *testing.T) {
+	for _, kind := range []string{"attachment download", "retrieval skill permission"} {
+		t.Run(kind, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{spec: successSpec("old answer", "new answer")})
+			h.tg.SetFile("previous.txt", []byte("old content"))
+			h.say(documentUpdate(1, "previous.txt", "What is in here?"))
+			id := selected(t, h, aliceChat, 0, aliceID)
+			u := documentUpdate(2, "new.txt", "Summarize this file")
+			reason := "retry"
+			skill := filepath.Join(h.home, "skills", "web-access-barriers")
+			if kind == "retrieval skill permission" {
+				if os.Geteuid() == 0 {
+					t.Skip("permission injection needs an unprivileged test account")
+				}
+				u = msg(2, aliceChat, aliceID, "Start a fresh task")
+				if err := os.Chmod(skill, 0500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(skill, 0700) })
+				reason = "install web retrieval skill"
+			}
+			reply := h.text(u)
+			if !strings.Contains(reply, reason) || strings.Contains(reply, "old answer") {
+				t.Fatalf("failure reply = %q", reply)
+			}
+			failed := h.lastTurn(t, id)
+			if failed.Status != "failed" || failed.UpdateID != 2 || failed.Reply != "" || len(h.fake.Invocations(t)) != 1 {
+				t.Fatalf("unexpected turn after preparation failed: %+v", failed)
+			}
+			if kind == "retrieval skill permission" {
+				if err := os.Chmod(skill, 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				h.tg.SetFile("new.txt", []byte("replacement content"))
+			}
+			u.UpdateID = 3
+			u.Message.MessageID = 3
+			if reply := h.text(u); reply != "new answer" {
+				t.Fatalf("resend reply = %q", reply)
+			}
+			recovered := h.lastTurn(t, id)
+			if recovered.UpdateID != 3 || recovered.Status != "completed" || !recovered.Delivered || len(h.fake.Invocations(t)) != 2 {
+				t.Fatalf("resend turn = %+v", recovered)
+			}
+			if kind == "attachment download" {
+				currentDocumentPath(t, h.fake.Argv(t, 2), []byte("replacement content"))
+			}
+		})
+	}
+}
+
+func TestDocumentContextAfterSwitchAndRename(t *testing.T) {
+	h := newHarness(t, harnessOpts{spec: successSpec("received", "received")})
+	add := func(update int64, name string) string {
+		t.Helper()
+		h.tg.SetFile(name, []byte(name))
+		h.say(documentUpdate(update, name, "Describe"))
+		argv := h.fake.Invocations(t)
+		return currentDocumentPath(t, argv[len(argv)-1], []byte(name))
+	}
+	a := newSession(t, h, 1, aliceChat, aliceID, "A")
+	copper := add(2, "Copper.txt")
+	second := add(3, "another.txt")
+	newSession(t, h, 4, aliceChat, aliceID, "B")
+	indigo := add(5, "Indigo.txt")
+	h.text(msg(6, aliceChat, aliceID, "/use "+a))
+	h.text(msg(7, aliceChat, aliceID, "/rename Copper session"))
+	if got := selected(t, h, aliceChat, 0, aliceID); got != a {
+		t.Fatalf("selected %s after rename, want %s", got, a)
+	}
+	for _, update := range []int64{8, 9} {
+		h.text(msg(update, aliceChat, aliceID, "What were the titles?"))
+		calls := h.fake.Invocations(t)
+		argv := calls[len(calls)-1]
+		prompt := argv[len(argv)-1]
+		if !strings.Contains(prompt, copper) || !strings.Contains(prompt, second) || strings.Contains(prompt, indigo) {
+			t.Fatalf("wrong files offered on follow-up: %s", prompt)
+		}
 	}
 }

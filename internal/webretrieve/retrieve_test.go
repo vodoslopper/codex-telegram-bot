@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -56,6 +57,35 @@ func TestChallengeFallback(t *testing.T) {
 		}
 	}
 }
+func TestRetryBuildLogAfterChallenge(t *testing.T) {
+	const challengePage = "<html>Making sure you're not a bot</html>"
+	const log = "compile: success\n%check\nFAIL test_empty_queue: expected 0, got 1\n19 passed, 1 failed\nbuild wrapper exited 1"
+	var published atomic.Bool
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !published.Load() {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(challengePage))
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(log))
+	}))
+	defer s.Close()
+	retriever := Retriever{Client: s.Client(), Browser: func(context.Context, string) (string, bool, error) {
+		return challengePage, false, nil
+	}}
+	q := Request{URL: s.URL}
+	if blocked := retriever.Fetch(t.Context(), q); blocked.Error == "" || blocked.Content != "" {
+		t.Fatalf("challenge exposed as evidence: %+v", blocked)
+	}
+	published.Store(true)
+	got := retriever.Fetch(t.Context(), q)
+	if got.Error != "" || !strings.Contains(got.Content, "%check\n3: FAIL test_empty_queue: expected 0, got 1") {
+		t.Fatalf("retry did not retrieve the published failure: %+v", got)
+	}
+}
+
 func TestLimits(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
